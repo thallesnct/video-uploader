@@ -28,6 +28,7 @@ commit splits into two.
 | 11 | Notify & failure UX | `[ ]` | `make e2e ARGS="-k failure"` |
 | 12 | Production hardening | `[ ]` | `make ci` from a clean clone + `make security-verify` |
 | 13 | Deployment | `[ ]` | `make deploy-staging && make e2e BASE_URL=<staging>` |
+| 14 | Load testing | `[ ]` | Four scenarios run, results and bottlenecks recorded |
 
 ---
 
@@ -148,18 +149,30 @@ paused is stashed rather than dropped, and failures are produced and flushed
 container, so a machine with only Docker can still run everything.
 
 ## Phase 3 — Upload path `[ ]`
-Refs: ADR-0001, ADR-0006
+Refs: ADR-0001, ADR-0006, ADR-0016
 
-- [ ] `POST /videos` → row in `videos` (status `awaiting_upload`) + presigned PUT
+- [ ] Local OIDC issuer in compose + JWKS verification in the API (ADR-0016).
+      The issuer mints tokens instantly from a fixed key pair, so load tests are
+      not bottlenecked on an auth server.
+- [ ] `owner_id` from the `sub` claim; repository functions take it as a
+      **required argument**, so a missing tenant filter is impossible to write
+      by forgetting rather than by choosing
+- [ ] Migration: `videos` with `owner_id` not null + index
+- [ ] `POST /videos` → row (`awaiting_upload`) + presigned PUT under the
+      caller's own prefix only
 - [ ] `POST /videos/{id}/complete` → verify object exists, emit `video.uploaded`
 - [ ] Size/content-type limits enforced in the presign policy, not in the app
-- [ ] `GET /videos`, `GET /videos/{id}`
-- [ ] OIDC bearer verification (JWKS), owner-prefixed object keys, per-user quota
-      and rate limit — ADR-0015. Dev identity provider in compose.
+- [ ] Per-user quotas: upload size, concurrent uploads, videos in flight
+      (ADR-0016 — the noisy-neighbour behaviour the load test exists to reveal)
+- [ ] `GET /videos`, `GET /videos/{id}` — owner-filtered
+- [ ] Multi-stage image for the API: non-root, read-only rootfs (carried from
+      Phase 1/2, now that there is finally something to containerise)
 
 **Gate:** `make integration ARGS="-k upload"` — PUT the fixture to MinIO via the
 presigned URL, call `/complete`, assert exactly one `video.uploaded` message keyed
 by `video_id`, and that a second `/complete` does **not** produce a second message.
+Plus the isolation cases: **user B cannot presign into user A's prefix, cannot
+read user A's video, and cannot open an SSE stream for it.**
 
 ## Phase 4 — Probe stage `[ ]`
 Refs: ADR-0012 (conditional fan-out)
@@ -315,12 +328,34 @@ items below are written as K8s-when-adopted and degrade to compose equivalents
 **Gate:** `make deploy-staging && make e2e BASE_URL=<staging-url>` — the e2e suite
 passes against the deployed environment, not localhost.
 
+## Phase 14 — Load testing `[ ]`
+Refs: ADR-0016, ADR-0002, ADR-0008, ADR-0010
+
+The reason isolation and quotas are built rather than assumed. What is worth
+measuring here is not "requests per second" — it is where the pipeline bends.
+
+- [ ] Token minter driving N synthetic users against the local issuer
+- [ ] Scenario: upload throughput — concurrent presigned PUTs, measuring the API
+      only (bytes never cross it, so this should stay flat as size grows)
+- [ ] Scenario: transcode saturation — verify the parallelism ceiling really is
+      the partition count of `rendition.requested` (ADR-0002), by scaling workers
+      past it and watching lag stop improving
+- [ ] Scenario: SSE fan-out — concurrent open streams, since connection count is
+      the API's real capacity metric, not RPS (ADR-0008)
+- [ ] Scenario: noisy neighbour — one tenant floods; assert quotas keep the
+      others' end-to-end latency within budget
+- [ ] Record the numbers as SLO baselines in ADR-0015, replacing its placeholders
+
+**Gate:** a documented run of all four scenarios with results committed, and the
+bottleneck of each named.
+
 ---
 
 ## Open questions
 
-- [ ] Auth: is this single-user/local, or does it need per-user isolation?
-      (Affects object key prefixes and the SSE authorization check.)
+- [x] ~~Auth: single-user or per-user isolation?~~ **Answered 2026-08-26:**
+      per-user isolation, because this is not a study project and will be load
+      tested. Recorded as ADR-0016; object keys now carry the owner prefix.
 - [ ] Rendition ladder: confirm the target set (360/480/720/1080 assumed).
 - [ ] Retention: how long do source files and renditions live?
 - [ ] Deploy target — **assumed: hardened compose on a single host**, K8s as the
@@ -332,6 +367,7 @@ passes against the deployed environment, not localhost.
 | Date | Change | Why |
 |---|---|---|
 | 2026-08-25 | Plan, tracker and ADRs 0001–0013 written | Project kickoff |
+| 2026-08-26 | Per-user isolation confirmed (ADR-0016); object keys gain an owner prefix; Phase 3 gains auth/quota tasks and a Phase 14 for load testing | The user confirmed real-world intent and load testing, making tenancy a design input rather than a retrofit |
 | 2026-08-26 | Phase 2 contracts library landed; `make unit` green with 71 tests, `make lint` clean | The ADR-0004 eviction loop is now covered by unit tests rather than only by prose |
 | 2026-08-26 | Phase 1 infra landed; gate green from a clean slate. Three service-dependent checkboxes moved to Phase 2 | Nothing to configure, health-check or containerise until services exist |
 | 2026-08-26 | Frontend baseline corrected from React 18 to React 19 in PLAN.md and ADR-0014 | 18 was a stale default, not a decision; 19 is stable and unblocked by our stack |

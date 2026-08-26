@@ -19,46 +19,65 @@ if TYPE_CHECKING:  # boto3 is heavy; unit tests import this module for key build
 # --------------------------------------------------------------------------- keys
 
 
-def video_prefix(video_id: UUID | str) -> str:
-    return f"videos/{video_id}"
+def owner_prefix(owner_id: str) -> str:
+    """Everything a tenant owns lives under this prefix (ADR-0016).
+
+    The presigned URL the browser gets is signed for one exact key, and the API
+    only ever signs keys under the caller's own prefix — so this string is the
+    tenancy boundary, enforced by a bucket policy as well as by our code.
+    """
+    return f"users/{owner_id}"
 
 
-def source_key(video_id: UUID | str, extension: str) -> str:
-    return f"{video_prefix(video_id)}/source.{extension.lstrip('.')}"
+def video_prefix(owner_id: str, video_id: UUID | str) -> str:
+    return f"{owner_prefix(owner_id)}/videos/{video_id}"
 
 
-def rendition_key(video_id: UUID | str, rendition: str) -> str:
-    return f"{video_prefix(video_id)}/renditions/{rendition}.mp4"
+def source_key(owner_id: str, video_id: UUID | str, extension: str) -> str:
+    return f"{video_prefix(owner_id, video_id)}/source.{extension.lstrip('.')}"
 
 
-def hls_playlist_key(video_id: UUID | str, rendition: str) -> str:
-    return f"{video_prefix(video_id)}/hls/{rendition}/playlist.m3u8"
+def rendition_key(owner_id: str, video_id: UUID | str, rendition: str) -> str:
+    return f"{video_prefix(owner_id, video_id)}/renditions/{rendition}.mp4"
 
 
-def hls_master_key(video_id: UUID | str) -> str:
-    return f"{video_prefix(video_id)}/hls/master.m3u8"
+def hls_playlist_key(owner_id: str, video_id: UUID | str, rendition: str) -> str:
+    return f"{video_prefix(owner_id, video_id)}/hls/{rendition}/playlist.m3u8"
 
 
-def poster_key(video_id: UUID | str) -> str:
-    return f"{video_prefix(video_id)}/thumbs/poster.jpg"
+def hls_master_key(owner_id: str, video_id: UUID | str) -> str:
+    return f"{video_prefix(owner_id, video_id)}/hls/master.m3u8"
 
 
-def sprite_key(video_id: UUID | str) -> str:
-    return f"{video_prefix(video_id)}/thumbs/sprite.jpg"
+def poster_key(owner_id: str, video_id: UUID | str) -> str:
+    return f"{video_prefix(owner_id, video_id)}/thumbs/poster.jpg"
 
 
-def sprite_vtt_key(video_id: UUID | str) -> str:
-    return f"{video_prefix(video_id)}/thumbs/sprite.vtt"
+def sprite_key(owner_id: str, video_id: UUID | str) -> str:
+    return f"{video_prefix(owner_id, video_id)}/thumbs/sprite.jpg"
 
 
-def scratch_key(video_id: UUID | str, name: str) -> str:
+def sprite_vtt_key(owner_id: str, video_id: UUID | str) -> str:
+    return f"{video_prefix(owner_id, video_id)}/thumbs/sprite.vtt"
+
+
+def owns(owner_id: str, key: str) -> bool:
+    """Whether a key belongs to this owner.
+
+    Used before signing or serving anything: a key that arrived from a client is
+    a claim, never a fact.
+    """
+    return key.startswith(f"{owner_prefix(owner_id)}/") or key.startswith(f"tmp/{owner_id}/")
+
+
+def scratch_key(owner_id: str, video_id: UUID | str, name: str) -> str:
     """Temporary output, promoted to its final key only once complete.
 
     Writing straight to the final key would let a half-written file be mistaken
     for a finished rendition by the idempotency check in ADR-0005. tmp/ is also
     the only prefix the bucket lifecycle expires.
     """
-    return f"tmp/{video_id}/{name}"
+    return f"tmp/{owner_id}/{video_id}/{name}"
 
 
 # -------------------------------------------------------------------------- store
