@@ -324,16 +324,62 @@ implementation would provably be evicted mid-handler.
   purpose (mutual exclusion, not a completion check). Caught on review before
   it was ever run, not by a test.
 
-## Phase 6 — Read model & projector `[ ]`
+## Phase 6 — Read model & projector `[x]`
 Refs: ADR-0007
 
-- [ ] Schema: `videos`, `renditions` (unique on `(video_id, rendition)`),
-      `events` (append-only, for `Last-Event-ID` replay)
-- [ ] `projector` consumes `video.status` (shared group) and upserts
-- [ ] Offsets committed **after** the DB write; upsert makes replay safe
+- [x] Schema: `videos`, `renditions` (unique on `(video_id, rendition)` —
+      both already existed from Phase 5) plus `events` (append-only,
+      `event_id` unique, for `Last-Event-ID` replay) — migration 0004_events
+- [x] `projector` consumes `video.status` **and** `pipeline.failed` (shared
+      group) and upserts — the registry's `consumed_by` list already said so;
+      ADR-0007's prose undersold it (follow-on added)
+- [x] Offsets committed **after** the DB write; upsert makes replay safe
 
-**Gate:** `make integration ARGS="-k projector"` — replay the same event batch twice,
-assert identical final rows and no duplicate `renditions`.
+**Gate:** `make integration ARGS="-k projector"` — 6 passed. Replaying the same
+two-event batch twice produced exactly one `videos` row, one `renditions` row,
+and two `events` rows (not four) — no duplicates anywhere.
+
+**Discovered mid-phase, resolved before this phase closed (not deferred):**
+
+1. `VideoStatusChanged` didn't carry the data the read model needs
+   (`duration_s`/`width`/`height`/`expected_renditions`/rendition completion).
+   ADR-0007's decision text said the projector "consumes video.status" but
+   that topic's only payload was a human-readable `detail` string. Fixed by
+   enriching the event (additive, optional fields) rather than having the
+   projector or the future SSE gateway read internal stage topics — see
+   ADR-0007's follow-on.
+2. `video.status`/`pipeline.failed` are `retries: false`, and `TopicRegistry`
+   skipped creating a DLQ for them too — the projector is the first consumer
+   to ever hit that path via `StageWorker`, and a transient failure would have
+   tried to produce to a retry-tier topic that was never created. First fix
+   attempt (leave the offset uncommitted, keep polling) was itself wrong:
+   Kafka offsets are monotonic, so a later successful commit would silently
+   skip the failed message forever. Corrected to: DLQ topics always exist now
+   (independent of `retries`), and a TRANSIENT failure with no route crashes
+   the worker so a restart resumes from the last committed offset. See
+   ADR-0005's follow-on for the full reasoning and the rejected alternative
+   (giving `video.status` a normal retry ladder breaks its per-video
+   ordering guarantee).
+3. Crash-to-retry only works if a misclassified *permanent* failure doesn't
+   loop forever. The concrete case: the projector's `UPDATE videos SET ...
+   WHERE id=<missing>` is a silent no-op, and the following `events` insert's
+   FK then raises `IntegrityError` — unclassified, that defaults to TRANSIENT
+   and crash-loops on the same message indefinitely. The handler now
+   reclassifies `IntegrityError` as `TerminalError`, routing it to the
+   (now always-present) `video.status.dlq` instead.
+4. `docker compose run migrate` had never actually worked — the api image
+   (which the `migrate` service builds from) never shipped `alembic.ini` or
+   `migrations/`. Every prior migration was applied via the host venv, which
+   masked it. Fixed and verified by rebuilding and running the service
+   directly (a no-op, since the host venv had already applied 0004_events).
+5. Not fixed, documented instead: the projector is deliberately not wired
+   into `docker-compose.yml` — no worker is yet (Phase 13's job) — so "crash
+   and let the orchestrator restart it" currently means a manual restart.
+   Acceptable pre-deployment; flagged in ADR-0005's follow-on to revisit
+   before Phase 13 is called done.
+6. No monotonicity guard on `videos.status` — a manual DLQ replay could in
+   principle regress state out of order. Deferred as a Phase 12 item
+   alongside the Phase 5 claim-window gap (see ADR-0007's follow-on).
 
 ## Phase 7 — SSE gateway `[ ]`
 Refs: ADR-0008
