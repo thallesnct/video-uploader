@@ -76,10 +76,12 @@ Downloads and playback also use presigned GETs, so the API is never a media prox
   accumulate and are billed indefinitely.
 - **Promoting a scratch object with `copy_object` caps at 5 GB on real S3.**
   A single-part server-side copy cannot exceed that, so renditions above it need
-  multipart copy (`create_multipart_upload` + `upload_part_copy`). MinIO is more
-  permissive, which means this will pass every local test and fail in
-  production on exactly the large files the pipeline exists to handle. Phase 5
-  must size-check before promoting.
+  multipart copy. MinIO is more permissive, which means this will pass every
+  local test and fail in production on exactly the large files the pipeline
+  exists to handle. **Resolved in Phase 5** — `storage.promote()` uses boto3's
+  transfer-managed `client.copy()` rather than the low-level `copy_object`;
+  `copy()` chooses single- or multi-part transparently above its transfer
+  threshold, so no manual size check or hand-rolled multipart logic is needed.
 - Because the client writes directly, **the object key is the trust boundary**:
   the presign must pin the exact key, and `/complete` must verify rather than
   trust the client's claim.

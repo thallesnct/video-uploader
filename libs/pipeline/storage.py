@@ -169,10 +169,18 @@ class ObjectStore:
 
         Copy-then-delete rather than write-in-place so a crash mid-transcode can
         never leave a truncated file sitting at the key the packager reads.
+
+        Uses the transfer-managed `copy()`, not the low-level `copy_object` API.
+        `copy_object` performs a single-request server-side copy that real S3
+        caps at 5 GB (ADR-0006) — MinIO is more permissive, so that cap passes
+        every local test and only fails in production, on exactly the large
+        renditions this pipeline exists to handle. `copy()` transparently uses
+        multipart copy above boto3's transfer threshold, verified against a
+        real boto3 client rather than assumed.
         """
-        self.client.copy_object(
-            Bucket=self.bucket,
+        self.client.copy(
             CopySource={"Bucket": self.bucket, "Key": scratch},
+            Bucket=self.bucket,
             Key=final,
         )
         self.client.delete_object(Bucket=self.bucket, Key=scratch)
