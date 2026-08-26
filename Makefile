@@ -64,11 +64,21 @@ unit: ## Fast tests, no I/O, no containers
 # Integration tests drive testcontainers, so they need the Docker socket and
 # cannot run inside the uv container. They use host uv when present, otherwise a
 # project-local venv — nothing is installed outside this directory.
+# Installed from the exported lockfile, never resolved by pip. Letting pip
+# re-resolve ~100 packages sends it backtracking through ancient versions for
+# many minutes; uv.lock is the source of truth (ADR-0014), so we install exactly
+# what it pins.
 HOST_VENV := .venv-host
-$(HOST_VENV)/bin/pytest:
+requirements-dev.txt: uv.lock pyproject.toml
+	docker run --rm -v "$(CURDIR)":/w -w /w -e UV_CACHE_DIR=/w/.uv-cache \
+	  ghcr.io/astral-sh/uv:python3.11-bookworm-slim \
+	  uv export --all-extras --no-hashes --no-emit-project \
+	  --format requirements-txt -o requirements-dev.txt
+
+$(HOST_VENV)/bin/pytest: requirements-dev.txt
 	python3 -m venv $(HOST_VENV)
 	$(HOST_VENV)/bin/pip install -q -U pip
-	$(HOST_VENV)/bin/pip install -q -e ".[dev]"
+	$(HOST_VENV)/bin/pip install -q --no-deps -r requirements-dev.txt
 
 ifdef UV
   RUN_HOST := uv run --extra dev
