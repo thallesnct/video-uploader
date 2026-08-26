@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
 # Create the bucket and its lifecycle rules. Safe to re-run.
 #
-# Lifecycle matters more here than it looks: ADR-0001 warns that a rule deleting
-# a source before its retry window closes produces unreproducible failures, so
-# only tmp/ and abandoned multipart uploads expire — never sources or renditions.
+# Only tmp/ scratch expires. Sources and renditions never do: ADR-0001 warns that
+# deleting a source before its retry window closes turns a retryable failure into
+# an unreproducible one.
+#
+# Incomplete multipart uploads are NOT handled here. On AWS S3 that is an
+# AbortIncompleteMultipartUpload lifecycle rule, but MinIO rejects that rule and
+# instead purges stale uploads server-side via `api stale_uploads_expiry`
+# (24h by default). The production deployment on real S3 must add the lifecycle
+# rule explicitly — see ADR-0006.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -25,15 +31,11 @@ cat <<JSON | mc ilm import "local/$S3_BUCKET"
       "Status": "Enabled",
       "Filter": { "Prefix": "tmp/" },
       "Expiration": { "Days": 1 }
-    },
-    {
-      "ID": "abort-incomplete-multipart",
-      "Status": "Enabled",
-      "Filter": { "Prefix": "" },
-      "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 7 }
     }
   ]
 }
 JSON
-echo "  lifecycle rules applied to $S3_BUCKET"
+echo "  lifecycle: tmp/ expires after 1 day"
+echo -n "  stale multipart uploads: "
+mc admin config get local api stale_uploads_expiry 2>/dev/null || echo "server default (24h)"
 '
