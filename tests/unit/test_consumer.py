@@ -252,3 +252,32 @@ def test_involuntarily_lost_partitions_raise_the_same_flag() -> None:
     consumer.on_lost(consumer, ["p0"])
 
     assert worker.revoked
+
+
+def test_both_producers_build_identical_headers() -> None:
+    """The sync and async paths must not drift apart on what a message looks like."""
+    from pipeline.producer import build_headers
+
+    event = events.VideoUploaded(
+        video_id=uuid4(),
+        producer="api",
+        object_key="k",
+        filename="f.mp4",
+        size_bytes=1,
+        content_type="video/mp4",
+    )
+    names = {key for key, _ in build_headers(event)}
+
+    assert {"event_type", "schema_version"} <= names
+
+
+async def test_async_producer_refuses_to_publish_before_start() -> None:
+    """A producer that was never started must say so, not fail obscurely."""
+    from pipeline.producer import AsyncEventProducer
+
+    producer = AsyncEventProducer()
+    event = events.VideoStatusChanged(
+        video_id=uuid4(), producer="api", state=events.VideoState.UPLOADED
+    )
+    with pytest.raises(RuntimeError, match="start"):
+        await producer.publish("video.status", event)

@@ -35,6 +35,8 @@ dependencies = [
   "opentelemetry-instrumentation-fastapi>=0.47b0",
   "opentelemetry-instrumentation-sqlalchemy>=0.47b0",
   "opentelemetry-instrumentation-botocore>=0.47b0",
+  # Identity (ADR-0016) — JWKS verification, and the dev issuer signs with it
+  "pyjwt[crypto]>=2.9",
   # Ops CLI
   "typer>=0.12",
 ]
@@ -100,5 +102,5 @@ disallow_any_generics = true
 warn_return_any = true
 
 [[tool.mypy.overrides]]
-module = ["confluent_kafka.*", "aioboto3.*", "testcontainers.*", "boto3.*", "botocore.*"]
+module = ["confluent_kafka.*", "aioboto3.*", "testcontainers.*", "boto3.*", "botocore.*", "aiokafka.*"]
 ignore_missing_imports = true
