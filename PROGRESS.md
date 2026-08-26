@@ -15,7 +15,7 @@ commit splits into two.
 | Phase | Title | State | Gate |
 |---|---|---|---|
 | 0 | Config baseline & docs | `[x]` | `ls -l CLAUDE.md` resolves to `AGENTS.md` |
-| 1 | Infra skeleton | `[ ]` | `make up && make smoke` |
+| 1 | Infra skeleton | `[~]` | `make up && make smoke` ✅ passing |
 | 2 | Shared contracts library | `[ ]` | `make unit` |
 | 3 | Upload path | `[ ]` | `make integration ARGS="-k upload"` |
 | 4 | Probe stage | `[ ]` | `make integration ARGS="-k probe"` |
@@ -40,22 +40,65 @@ commit splits into two.
 
 **Gate:** `ls -l CLAUDE.md` shows `CLAUDE.md -> AGENTS.md`. ✅
 
-## Phase 1 — Infra skeleton `[ ]`
-Refs: ADR-0002, ADR-0006, ADR-0007
+## Phase 1 — Infra skeleton `[~]`
+Refs: ADR-0002, ADR-0006, ADR-0007, ADR-0014, ADR-0015
 
-- [ ] `docker-compose.yml`: Kafka in **KRaft mode** (no ZooKeeper), Postgres 16, MinIO
-- [ ] `docker-compose.obs.yml`: Prometheus, Grafana, Tempo, OTel Collector, kafka-exporter
-- [ ] Topic bootstrap job — partitions/RF per the ADR-0002 table, idempotent re-run
-- [ ] MinIO bucket + lifecycle policy bootstrap
-- [ ] `Makefile`: `up down logs topics smoke unit integration e2e lint ci`
-- [ ] Alembic baseline migration (empty)
-- [ ] `pyproject.toml` + `uv.lock`, ruff/mypy/pre-commit config (ADR-0014)
-- [ ] `.env.example` documenting every variable; `pydantic-settings` module per service
-- [ ] `/healthz` (no dependency checks) and `/readyz` (checks deps) on every service — ADR-0015
-- [ ] Multi-stage images: non-root user, pinned ffmpeg in the worker image only
+- [x] `docker-compose.yml`: Kafka in **KRaft mode** (no ZooKeeper), Postgres 16, MinIO
+- [x] `docker-compose.obs.yml`: Prometheus, Grafana, Tempo, OTel Collector, kafka-exporter
+- [x] Topic bootstrap job — partitions/RF per the ADR-0002 table, idempotent re-run
+- [x] MinIO bucket + lifecycle policy bootstrap
+- [x] `Makefile`: `up down logs topics smoke unit integration e2e lint ci`
+- [x] Alembic baseline migration (empty)
+- [x] `pyproject.toml` + `uv.lock`, ruff/mypy/pre-commit config (ADR-0014)
+- [x] `.env.example` documenting every variable
+- [ ] `pydantic-settings` module per service — **deferred to Phase 2**: no service
+      exists to configure yet. `.env.example` is the contract they will read.
+- [ ] `/healthz` (no dependency checks) and `/readyz` (checks deps) on every
+      service — ADR-0015. **Deferred to Phase 2**: lands as
+      `libs/pipeline/health.py` so every service gets it by construction rather
+      than by copy-paste.
+- [ ] Multi-stage images: non-root user, pinned ffmpeg in the worker image only —
+      **deferred to Phase 2**, for the same reason: nothing to containerise yet.
 
-**Gate:** `make up && make smoke` — every container healthy, all topics present
-with the right partition counts, MinIO bucket exists, Postgres accepts a connection.
+**Gate:** `make up && make smoke` — **PASSING**, verified from a clean slate
+(`make down` wiping volumes, then `up`, then `smoke`) on 2026-08-26:
+
+```
+kafka
+  PASS  external listener reachable on localhost:29092
+  PASS  topic list readable
+  PASS  7 declared topics exist with the right partition counts
+  PASS  retry and DLQ topics exist
+  PASS  auto topic creation is disabled
+postgres
+  PASS  accepting connections on localhost:5432
+  PASS  query executes
+minio
+  PASS  health endpoint live
+  PASS  bucket 'videos' exists
+  PASS  CORS preflight allows browser origin http://localhost:5173
+
+SMOKE PASSED — Kafka, Postgres and MinIO are usable
+```
+
+27 topics created from `infra/topics.json` (7 declared + retry tiers + DLQs).
+
+The phase stays `[~]` rather than `[x]`: the gate passes, but three checkboxes
+presuppose services that do not exist. They move to Phase 2 rather than being
+ticked on a technicality.
+
+### What actually went wrong here (worth remembering)
+
+- **Kafka bound to `kafka:9092` instead of `0.0.0.0`.** The container was
+  healthy-looking but nothing inside it could reach the broker over localhost —
+  the healthcheck and every CLI tool failed. Fixed in `0bda6ca`.
+- **MinIO rejects `AbortIncompleteMultipartUpload` lifecycle rules** and has no
+  `mc` flag for it; it expires stale uploads server-side instead. Real S3 does
+  want that rule, so Phase 13 must add it or abandoned parts bill forever. Noted
+  in ADR-0006.
+- **`make down` referenced `docker-compose.obs.yml` before it existed**, so the
+  whole gate chain aborted silently. Ordering matters in a Makefile that spans
+  two compose files.
 
 ## Phase 2 — Shared contracts library `[ ]`
 Refs: ADR-0003, ADR-0005, ADR-0009
@@ -255,5 +298,6 @@ passes against the deployed environment, not localhost.
 | Date | Change | Why |
 |---|---|---|
 | 2026-08-25 | Plan, tracker and ADRs 0001–0013 written | Project kickoff |
+| 2026-08-26 | Phase 1 infra landed; gate green from a clean slate. Three service-dependent checkboxes moved to Phase 2 | Nothing to configure, health-check or containerise until services exist |
 | 2026-08-26 | Frontend baseline corrected from React 18 to React 19 in PLAN.md and ADR-0014 | 18 was a stale default, not a decision; 19 is stable and unblocked by our stack |
 | 2026-08-25 | ADR-0014 (library stack) and ADR-0015 (production readiness) added; Phase 12 expanded, Phase 13 added | Target is a production-grade app, so dependency and hardening choices are decided up front |
