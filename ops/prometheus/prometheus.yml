@@ -1,0 +1,29 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs: [{ targets: ["localhost:9090"] }]
+
+  # Per-group consumer lag: the single number that names the bottleneck stage
+  # (ADR-0010). Not derivable from application metrics — it needs the broker view.
+  - job_name: kafka
+    static_configs: [{ targets: ["kafka-exporter:9308"] }]
+
+  # Application targets. These stay DOWN until the services exist (Phase 3+),
+  # which is honest: a missing target is visible, a forgotten one is not.
+  - job_name: api
+    static_configs: [{ targets: ["api:8000"] }]
+  - job_name: workers
+    static_configs:
+      - targets:
+          - "worker-probe:8000"
+          - "worker-transcode:8000"
+          - "worker-thumbnail:8000"
+          - "worker-package:8000"
+          - "worker-notify:8000"
+          - "projector:8000"

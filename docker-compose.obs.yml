@@ -1,0 +1,86 @@
+# Observability stack, kept in a separate file so day-to-day development does not
+# pay for it: `make up` runs the core services, `make obs-up` adds these.
+#
+# ADR-0010: Prometheus and Grafana are METRICS. Traces are the other half, and
+# they are what answers "what happened to *this* video" - so Tempo and an OTel
+# collector are here too, not treated as optional extras.
+services:
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: vp-prometheus
+    ports: ["9090:9090"]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+    volumes:
+      - ./ops/prometheus:/etc/prometheus:ro
+      - prometheus-data:/prometheus
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: vp-grafana
+    ports: ["3000:3000"]
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_USERS_DEFAULT_THEME: dark
+    volumes:
+      # Dashboards are code (ADR-0010): provisioned from the repo, never clicked
+      # together in the UI and lost on the next container rebuild.
+      - ./ops/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./ops/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on: [prometheus, tempo]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  tempo:
+    image: grafana/tempo:2.5.0
+    container_name: vp-tempo
+    command: ["-config.file=/etc/tempo/tempo.yml"]
+    ports:
+      - "3200:3200"   # query API
+    volumes:
+      - ./ops/tempo/tempo.yml:/etc/tempo/tempo.yml:ro
+      - tempo-data:/var/tempo
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3200/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.104.0
+    container_name: vp-otel
+    command: ["--config=/etc/otel/collector.yml"]
+    ports:
+      - "4317:4317"   # OTLP gRPC — services send spans here
+      - "4318:4318"   # OTLP HTTP
+    volumes:
+      - ./ops/otel/collector.yml:/etc/otel/collector.yml:ro
+    depends_on: [tempo]
+
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:v1.7.0
+    container_name: vp-kafka-exporter
+    command: ["--kafka.server=kafka:9092"]
+    ports: ["9308:9308"]
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+volumes:
+  prometheus-data:
+  grafana-data:
+  tempo-data:

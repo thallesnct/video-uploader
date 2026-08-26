@@ -1,0 +1,18 @@
+# Alert on symptoms, not causes (ADR-0015). Thresholds are placeholders until
+# Phase 10 measures real numbers.
+groups:
+  - name: pipeline
+    rules:
+      - alert: ConsumerLagHigh
+        expr: kafka_consumergroup_lag_sum > 1000
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "Consumer group {{ $labels.consumergroup }} is falling behind"
+
+      - alert: DeadLetterQueueNonEmpty
+        expr: sum by (topic) (kafka_topic_partition_current_offset{topic=~".*\\.dlq"}) > 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "Messages in {{ $labels.topic }} — a video failed terminally"
