@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import DateTime, Index, Integer, Numeric, String, func
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, Numeric, String, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -59,4 +59,50 @@ class VideoRow(Base):
         Index("ix_videos_owner_created", "owner_id", created_at.desc()),
         # Counting in-flight work for quota checks (ADR-0016).
         Index("ix_videos_owner_status", "owner_id", "status"),
+    )
+
+
+class RenditionRow(Base):
+    """Two column groups, two owners (ADR-0007's column-ownership rule):
+
+    STATE  — status, object_key, failure_reason, completed_at: projector-owned
+             once Phase 6 lands. Untouched by the Phase 5 transcode worker.
+    CLAIM  — attempt, claimed_at: transcode-worker-owned, used only to elect a
+             single owner for expensive work when a message could be in flight
+             twice (e.g. a manual DLQ replay racing a live retry).
+
+    `libs/pipeline/repository.py`'s `RenditionRepository` enforces this split
+    in code: its only write method touches claim columns, never state ones.
+    """
+
+    __tablename__ = "renditions"
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    video_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("videos.id"), nullable=False
+    )
+    owner_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    rendition: Mapped[str] = mapped_column(String(16), nullable=False)
+
+    # --- STATE: projector-owned (Phase 6) ---
+    status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    object_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    failure_reason: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # --- CLAIM: transcode-worker-owned ---
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint("video_id", "rendition", name="uq_renditions_video_rendition"),
+        Index("ix_renditions_video", "video_id"),
+        Index("ix_renditions_owner_status", "owner_id", "status"),
     )

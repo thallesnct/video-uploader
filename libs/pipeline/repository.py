@@ -7,13 +7,17 @@ than reached by forgetting a keyword (ADR-0016).
 
 from __future__ import annotations
 
+import uuid
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import func, select, update
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from pipeline.events import VideoState
-from pipeline.models import VideoRow
+from pipeline.models import RenditionRow, VideoRow
 
 # States that occupy pipeline capacity, for quota accounting.
 IN_FLIGHT_STATES = (
@@ -103,3 +107,74 @@ class VideoRepository:
             .returning(VideoRow.id)
         )
         return result.scalar_one_or_none() is not None
+
+
+class RenditionRepository:
+    """The transcode worker's only sanctioned write path (ADR-0007, ADR-0005).
+
+    Sync, not async: confluent-kafka's poll loop is blocking (ADR-0009), so a
+    worker's DB access is too. This is the concrete enforcement of the
+    column-ownership rule — its one write method touches only `attempt` and
+    `claimed_at`. Nothing here can set `status`, `object_key`, or
+    `failure_reason`; those belong to the projector once Phase 6 lands.
+    """
+
+    # A claim older than this is presumed abandoned (worker crashed mid-job)
+    # and may be re-claimed. Set well above any realistic transcode duration —
+    # a genuinely still-processing job is protected by max.poll.interval.ms and
+    # the pause/resume loop (ADR-0004), not by this window.
+    STALE_AFTER = timedelta(hours=2)
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def claim(self, owner_id: str, video_id: UUID, rendition: str) -> bool:
+        """Elect a single owner for this (video_id, rendition)'s work.
+
+        Guards against a message being processed twice *concurrently* — the
+        realistic case is a manual DLQ replay racing a live retry-tier message
+        for the same rendition, not normal Kafka redelivery (which is
+        sequential: the previous attempt has either committed or been evicted
+        before a new one starts, per ADR-0004).
+
+        Upsert rather than a plain UPDATE: no row exists yet for the first
+        attempt at a rendition, since nothing creates one ahead of time.
+        Returns False if another attempt already holds a live claim.
+        """
+        now = datetime.now(UTC)
+        stale_before = now - self.STALE_AFTER
+        statement = (
+            insert(RenditionRow)
+            .values(
+                id=uuid.uuid4(),
+                video_id=video_id,
+                owner_id=owner_id,
+                rendition=rendition,
+                attempt=1,
+                claimed_at=now,
+            )
+            .on_conflict_do_update(
+                constraint="uq_renditions_video_rendition",
+                set_={"attempt": RenditionRow.attempt + 1, "claimed_at": now},
+                # Whether the rendition is already done is is_completed()'s
+                # question, checked before claim() is ever called — this guard
+                # exists only to keep two concurrent attempts from both winning.
+                where=(RenditionRow.claimed_at.is_(None))
+                | (RenditionRow.claimed_at < stale_before),
+            )
+            .returning(RenditionRow.id)
+        )
+        result = self._session.execute(statement)
+        self._session.commit()
+        return result.scalar_one_or_none() is not None
+
+    def is_completed(self, owner_id: str, video_id: UUID, rendition: str) -> bool:
+        """Read-only. Reading a projector-owned column is fine; writing it is not."""
+        result = self._session.execute(
+            select(RenditionRow.status).where(
+                RenditionRow.video_id == video_id,
+                RenditionRow.owner_id == owner_id,
+                RenditionRow.rendition == rendition,
+            )
+        )
+        return result.scalar_one_or_none() == VideoState.COMPLETED.value
