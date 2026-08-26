@@ -7,6 +7,7 @@ than reached by forgetting a keyword (ADR-0016).
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
@@ -16,8 +17,8 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from pipeline.events import VideoState
-from pipeline.models import RenditionRow, VideoRow
+from pipeline.events import Event, PipelineFailed, VideoState, VideoStatusChanged
+from pipeline.models import EventRow, RenditionRow, VideoRow
 
 # States that occupy pipeline capacity, for quota accounting.
 IN_FLIGHT_STATES = (
@@ -178,3 +179,109 @@ class RenditionRepository:
             )
         )
         return result.scalar_one_or_none() == VideoState.COMPLETED.value
+
+
+class ProjectorRepository:
+    """The projector's write path — the sole owner of STATE columns (ADR-0007).
+
+    Sync, not async: same reason as RenditionRepository (ADR-0009). Every write
+    method is an upsert, so replaying a Kafka partition is safe by construction;
+    the caller is expected to run one `apply()` per handler invocation inside a
+    single transaction (`pipeline.db.sync_session_scope`) and commit only once,
+    so the videos/renditions upsert and the events-log append can never land in
+    two different transactions and diverge on a crash between them.
+    """
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def apply(self, event: Event) -> None:
+        if isinstance(event, VideoStatusChanged):
+            self._apply_status(event)
+        elif isinstance(event, PipelineFailed):
+            self._apply_failure(event)
+        else:
+            raise TypeError(f"projector cannot apply event type {type(event).__name__}")
+        self._append_event(event)
+
+    def _apply_status(self, event: VideoStatusChanged) -> None:
+        values: dict[str, object] = {"status": event.state.value}
+        for field in ("duration_s", "width", "height", "expected_renditions"):
+            value = getattr(event, field)
+            if value is not None:
+                values[field] = value
+        self._session.execute(
+            update(VideoRow)
+            .where(VideoRow.id == event.video_id, VideoRow.owner_id == event.owner_id)
+            .values(**values)
+        )
+
+        # rendition_object_key is only ever set once a rendition has actually
+        # finished (worker_transcode's _announce); a rendition-scoped status
+        # event with no object key yet has no STATE data worth writing.
+        if event.rendition is not None and event.rendition_object_key is not None:
+            now = datetime.now(UTC)
+            statement = (
+                insert(RenditionRow)
+                .values(
+                    id=uuid.uuid4(),
+                    video_id=event.video_id,
+                    owner_id=event.owner_id,
+                    rendition=event.rendition,
+                    status=VideoState.COMPLETED.value,
+                    object_key=event.rendition_object_key,
+                    completed_at=now,
+                )
+                .on_conflict_do_update(
+                    constraint="uq_renditions_video_rendition",
+                    set_={
+                        "status": VideoState.COMPLETED.value,
+                        "object_key": event.rendition_object_key,
+                        "completed_at": now,
+                    },
+                )
+            )
+            self._session.execute(statement)
+
+    def _apply_failure(self, event: PipelineFailed) -> None:
+        """Every pipeline.failed this system emits today is terminal — it is
+        only produced from the DLQ branch (ADR-0005 follow-on) — so its arrival
+        is treated unconditionally as a terminal failure, not a retry signal."""
+        self._session.execute(
+            update(VideoRow)
+            .where(VideoRow.id == event.video_id, VideoRow.owner_id == event.owner_id)
+            .values(status=VideoState.FAILED.value, failure_reason=event.reason)
+        )
+        if event.rendition is not None:
+            statement = (
+                insert(RenditionRow)
+                .values(
+                    id=uuid.uuid4(),
+                    video_id=event.video_id,
+                    owner_id=event.owner_id,
+                    rendition=event.rendition,
+                    status=VideoState.FAILED.value,
+                    failure_reason=event.reason,
+                )
+                .on_conflict_do_update(
+                    constraint="uq_renditions_video_rendition",
+                    set_={"status": VideoState.FAILED.value, "failure_reason": event.reason},
+                )
+            )
+            self._session.execute(statement)
+
+    def _append_event(self, event: Event) -> None:
+        """De-duplicated by event_id, not by (video_id, offset): a replayed
+        partition after a crash between the DB commit and the Kafka offset
+        commit must insert nothing twice (ADR-0007, ADR-0008)."""
+        statement = (
+            insert(EventRow)
+            .values(
+                video_id=event.video_id,
+                event_id=event.event_id,
+                type=event.type,
+                payload=json.loads(event.serialize()),
+            )
+            .on_conflict_do_nothing(index_elements=["event_id"])
+        )
+        self._session.execute(statement)
