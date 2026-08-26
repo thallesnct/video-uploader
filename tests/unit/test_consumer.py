@@ -241,3 +241,14 @@ def test_revocation_flag_resets_between_messages() -> None:
     worker.run(max_messages=2)
 
     assert seen == [False, False], "a stale revocation leaked into the next message"
+
+
+def test_involuntarily_lost_partitions_raise_the_same_flag() -> None:
+    """on_lost IS the ADR-0004 eviction: the group decided we were gone."""
+    consumer = FakeConsumer([a_message()])
+    worker = build(consumer, lambda event, view: None)
+    worker.subscribe()
+
+    consumer.on_lost(consumer, ["p0"])
+
+    assert worker.revoked

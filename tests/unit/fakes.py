@@ -63,6 +63,7 @@ class FakeConsumer:
     def subscribe(self, topics: list[str], **callbacks: Any) -> None:
         self.subscribed = list(topics)
         self.on_revoke = callbacks.get("on_revoke")
+        self.on_lost = callbacks.get("on_lost")
 
     def pause(self, partitions: list[Any]) -> None:
         self.paused = True

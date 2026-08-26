@@ -144,7 +144,14 @@ class StageWorker:
         consumer joining — so handlers need a way to notice that the partition
         they are working for is gone.
         """
-        self._consumer.subscribe(topics or [self.source_topic], on_revoke=self._on_revoke)
+        self._consumer.subscribe(
+            topics or [self.source_topic],
+            on_revoke=self._on_revoke,
+            # on_lost fires when partitions are taken involuntarily — the group
+            # decided we were gone. That is the ADR-0004 eviction case itself, so
+            # it must raise the same flag as an orderly revocation.
+            on_lost=self._on_revoke,
+        )
 
     def _on_revoke(self, consumer: Any, partitions: list[Any]) -> None:
         log.warning("partitions revoked during processing: %s", partitions)
