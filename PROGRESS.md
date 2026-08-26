@@ -16,7 +16,7 @@ commit splits into two.
 |---|---|---|---|
 | 0 | Config baseline & docs | `[x]` | `ls -l CLAUDE.md` resolves to `AGENTS.md` |
 | 1 | Infra skeleton | `[~]` | `make up && make smoke` ✅ passing |
-| 2 | Shared contracts library | `[x]` | `make unit` ✅ 71 tests |
+| 2 | Shared contracts library | `[x]` | `make unit` ✅ 72 tests |
 | 3 | Upload path | `[ ]` | `make integration ARGS="-k upload"` |
 | 4 | Probe stage | `[ ]` | `make integration ARGS="-k probe"` |
 | 5 | Transcode workers | `[ ]` | `make integration ARGS="-k transcode"` |
@@ -128,7 +128,7 @@ Refs: ADR-0003, ADR-0004, ADR-0005, ADR-0009, ADR-0010, ADR-0015
 - [ ] Multi-stage images (non-root, ffmpeg only in the worker image) — **still
       deferred**, now to Phase 3. There is still nothing to containerise.
 
-**Gate:** `make unit` — **PASSING**, 71 tests, plus `make lint` (ruff + mypy
+**Gate:** `make unit` — **PASSING**, 72 tests, plus `make lint` (ruff + mypy
 strict on `libs/pipeline`) clean.
 
 Includes the two the gate names explicitly: the envelope round-trips, and a
@@ -184,6 +184,9 @@ Refs: ADR-0004, ADR-0005 — **the highest-risk phase**
       `(video_id, rendition)` row is `completed`
 - [ ] Failure classification: retryable (transient S3/network) vs terminal
       (corrupt input) → retry topic vs DLQ
+- [ ] Size-check before `storage.promote()`: single-part `copy_object` caps at
+      5 GB on real S3 but not on MinIO, so large renditions pass every local
+      test and fail in production (ADR-0006). Use multipart copy above the cap.
 - [ ] Emit `rendition.completed` + `video.status`; emit `pipeline.failed` on DLQ
 
 **Gate:** `make integration ARGS="-k transcode"`, covering:

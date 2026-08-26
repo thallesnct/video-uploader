@@ -74,6 +74,12 @@ Downloads and playback also use presigned GETs, so the API is never a media prox
   The dev bootstrap relies on the MinIO behaviour, so the production deployment
   on real S3 must add the lifecycle rule explicitly or abandoned multipart parts
   accumulate and are billed indefinitely.
+- **Promoting a scratch object with `copy_object` caps at 5 GB on real S3.**
+  A single-part server-side copy cannot exceed that, so renditions above it need
+  multipart copy (`create_multipart_upload` + `upload_part_copy`). MinIO is more
+  permissive, which means this will pass every local test and fail in
+  production on exactly the large files the pipeline exists to handle. Phase 5
+  must size-check before promoting.
 - Because the client writes directly, **the object key is the trust boundary**:
   the presign must pin the exact key, and `/complete` must verify rather than
   trust the client's claim.
