@@ -91,8 +91,15 @@ class FakeConsumer:
 class FakeProducer:
     def __init__(self, ledger: list[str] | None = None) -> None:
         self.published: list[tuple[str, bytes, bytes, list[tuple[str, bytes]]]] = []
+        self.typed_published: list[tuple[str, Any]] = []
         self.flushes = 0
         self.events = ledger if ledger is not None else []
+
+    def publish(self, topic: str, event: Any, headers: Any = None) -> None:
+        """Records a typed event (e.g. PipelineFailed) separately from the raw
+        retry/DLQ republishing that publish_raw handles."""
+        self.typed_published.append((topic, event))
+        self.events.append("produce")
 
     def publish_raw(
         self,

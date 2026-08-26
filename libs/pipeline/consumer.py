@@ -24,7 +24,7 @@ from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any, Protocol
 
-from pipeline.events import Event, parse
+from pipeline.events import Event, PipelineFailed, parse
 from pipeline.obs import (
     DLQ_MESSAGES,
     RETRY_MESSAGES,
@@ -35,6 +35,7 @@ from pipeline.obs import (
 from pipeline.producer import EventProducer
 from pipeline.retry import FailureClass, RetryPolicy, classify, source_topic_of
 from pipeline.settings import kafka_settings
+from pipeline.topics import PIPELINE_FAILED
 
 log = logging.getLogger(__name__)
 
@@ -282,6 +283,7 @@ class StageWorker:
                 retry_count,
                 error,
             )
+            self._emit_pipeline_failed(view, error, retry_count)
         else:
             RETRY_MESSAGES.labels(topic=origin, tier=destination.rsplit(".", 1)[-1]).inc()
             log.warning(
@@ -291,6 +293,43 @@ class StageWorker:
                 retry_count + 1,
                 error,
             )
+
+    def _emit_pipeline_failed(
+        self, view: MessageView, error: BaseException, retry_count: int
+    ) -> None:
+        """Notify the rest of the system a message reached the DLQ.
+
+        Consumed by the projector (for the read model's failure_reason) and by
+        notify (Phase 11). Best-effort: the parse can fail if the payload itself
+        was poison, and this must never crash the polling loop over a message
+        that is already safely on the DLQ.
+        """
+        try:
+            event = parse(view.value)
+        except Exception:
+            log.warning(
+                "could not attach video/owner context to pipeline.failed for "
+                "an unparseable message on %s",
+                view.topic,
+            )
+            return
+        try:
+            self._producer.publish(
+                PIPELINE_FAILED,
+                PipelineFailed(
+                    video_id=event.video_id,
+                    owner_id=event.owner_id,
+                    producer=self.stage,
+                    stage=self.stage,
+                    reason=str(error)[:1024],
+                    retry_count=retry_count,
+                    terminal=True,
+                    rendition=getattr(event, "rendition", None),
+                ),
+            )
+            self._producer.flush()
+        except Exception:
+            log.warning("failed to publish pipeline.failed for %s", view.topic, exc_info=True)
 
     def _commit(self, raw: Any) -> None:
         """Commit synchronously, tolerating a partition we no longer own.
