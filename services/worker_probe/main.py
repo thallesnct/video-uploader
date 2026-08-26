@@ -130,6 +130,15 @@ def build_handler(store: ObjectStore, producer: EventProducer, prober: Prober = 
     return handle
 
 
+def _bucket_reachable(store: ObjectStore) -> bool:
+    """Readiness only — never wired to liveness (ADR-0015)."""
+    try:
+        store.client.head_bucket(Bucket=store.bucket)
+    except Exception:
+        return False
+    return True
+
+
 def main() -> None:
     from confluent_kafka import Consumer
 
@@ -150,7 +159,9 @@ def main() -> None:
     )
 
     health = HealthRegistry()
-    health.register("object_store", lambda: store.head("readiness-probe") is None or True)
+    # Must actually be able to fail. `head(...) is None or True` is always True,
+    # which looks like coverage while reporting ready through a total outage.
+    health.register("object_store", lambda: _bucket_reachable(store))
     serve_health(health, observability_settings().metrics_port)
 
     worker.subscribe()

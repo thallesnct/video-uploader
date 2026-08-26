@@ -232,7 +232,12 @@ async def complete_upload(video_id: uuid.UUID, caller: Caller) -> VideoResponse:
         await app.state.producer.publish(VIDEO_UPLOADED, uploaded)
         await app.state.producer.publish(
             VIDEO_STATUS,
-            VideoStatusChanged(video_id=video_id, producer=SERVICE, state=VideoState.UPLOADED),
+            VideoStatusChanged(
+                video_id=video_id,
+                owner_id=caller.owner_id,
+                producer=SERVICE,
+                state=VideoState.UPLOADED,
+            ),
         )
 
     return to_response(refreshed)

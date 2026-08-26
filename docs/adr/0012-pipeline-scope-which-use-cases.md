@@ -48,6 +48,20 @@ teach the system nothing and can be added any time.
 - **Live streaming ingest.** A different system with different primitives
   (low-latency segments, continuous sessions); would not reuse this design.
 
+## Follow-on decision: sources below the smallest rung (2026-08-26)
+
+Discovered while building the probe stage. A source whose short side is under
+360px matches no standard rung, and the obvious reading of "never upscale" gives
+it an **empty** ladder. That is worse than it looks: `expected_renditions` would
+be empty, so the packaging join in ADR-0013 would consider the video trivially
+complete and publish a master manifest listing nothing.
+
+So a source below every rung gets exactly one rendition, at its own resolution.
+The container and codec still need normalising for HLS even when the resolution
+does not change, and the ladder is never empty. Below 100px it is treated as
+terminal instead — it is not a video worth transcoding, and the rendition label
+pattern cannot express it.
+
 ## Consequences
 
 - The build stays focused on distributed-systems behaviour, which is where the
