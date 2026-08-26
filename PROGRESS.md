@@ -18,7 +18,7 @@ commit splits into two.
 | 1 | Infra skeleton | `[~]` | `make up && make smoke` ✅ passing |
 | 2 | Shared contracts library | `[x]` | `make unit` ✅ 72 tests |
 | 3 | Upload path | `[x]` | `make integration` ✅ 20 tests |
-| 4 | Probe stage | `[ ]` | `make integration ARGS="-k probe"` |
+| 4 | Probe stage | `[x]` | `make integration ARGS="-k probe"` ✅ 6 + `make ffmpeg-tests` ✅ 4 |
 | 5 | Transcode workers | `[ ]` | `make integration ARGS="-k transcode"` |
 | 6 | Read model & projector | `[ ]` | `make integration ARGS="-k projector"` |
 | 7 | SSE gateway | `[ ]` | `make integration ARGS="-k sse"` |
@@ -210,18 +210,43 @@ pinned `requirements-dev.txt` and installs with `--no-deps`. The project is not
 installed at all — `pytest`'s `pythonpath` imports it from the source tree,
 removing the build-backend step that hung the same way.
 
-## Phase 4 — Probe stage `[ ]`
-Refs: ADR-0012 (conditional fan-out)
+## Phase 4 — Probe stage `[x]`
+Refs: ADR-0011, ADR-0012, ADR-0013, ADR-0016
 
-- [ ] `worker_probe`: ffprobe → duration, resolution, codecs, audio streams
-- [ ] Ladder selection: never upscale — a 720p source yields 360p/480p/720p only
-- [ ] Emit `video.probed` + one `rendition.requested` per selected rendition
-- [ ] Emit `video.status` (`probed`, with the planned rendition list so the UI can
-      render placeholders immediately)
+- [x] `worker_probe`: ffprobe → duration, resolution, codecs, audio streams
+- [x] Ladder selection: never upscale — keyed on the **short side**, so portrait
+      video is classed correctly and rotation is irrelevant
+- [x] Emit `video.probed` + one `rendition.requested` per selected rendition
+- [x] Emit `video.status` (`probed`, with the planned rendition list so the UI
+      can render placeholders immediately)
+- [x] `owner_id` added to the event envelope — a worker cannot build an
+      owner-scoped key without it (ADR-0016 §6)
+- [x] Worker image with ffmpeg, sharing one `ffmpeg-base` stage between the
+      shipped image and the test image
 
-**Gate:** `make integration ARGS="-k probe"` — a 640×360 fixture emits exactly the
-sub-360p ladder and no 1080p request. Ladder selection also unit-tested with
-synthetic probe JSON (no ffmpeg needed).
+**Gate — split, because the original wording was unreachable on this host.**
+The gate said "a 640×360 fixture emits exactly the sub-360p ladder", which needs
+ffprobe. ffmpeg lives only in the worker image (ADR-0011), so rather than
+silently reinterpreting the gate as "injected metadata", it is now two checks:
+
+1. `make integration ARGS="-k probe"` — **PASSING**, 6 tests. Injects the prober
+   and covers the Kafka round trip, the fan-out, and the plan/fan-out invariant.
+2. `make ffmpeg-tests` — **PASSING**, 4 tests, run inside the worker image
+   against real ffprobe and the generated clip. This is where the original
+   wording is actually verified: a real 640×360 file yields `["360p"]` and no
+   1080p.
+
+Plus `make unit` (106) and `make lint` clean.
+
+### The assertion this phase exists for
+
+`test_the_plan_and_the_fan_out_cannot_disagree` asserts that the set of emitted
+`rendition.requested` messages **equals** `video.probed.expected_renditions` —
+not a subset in either direction. If those ever diverge, the packaging join
+(ADR-0013) waits forever for a rendition nobody was asked to produce, and the
+video sits in `transcoding` with nothing to alert on. The handler computes the
+ladder once and derives both from that single list, which is what makes the
+assertion hold by construction rather than by care.
 
 ## Phase 5 — Transcode workers `[ ]`
 Refs: ADR-0004, ADR-0005 — **the highest-risk phase**
@@ -403,6 +428,7 @@ bottleneck of each named.
 | Date | Change | Why |
 |---|---|---|
 | 2026-08-25 | Plan, tracker and ADRs 0001–0013 written | Project kickoff |
+| 2026-08-26 | Phase 4 probe stage landed; ladder is data-dependent and the plan/fan-out invariant is asserted | Gate split into an ffmpeg-free integration check and an in-image ffprobe check, rather than reinterpreting the original wording |
 | 2026-08-26 | Phase 3 upload path landed; integration gate green with 20 tests | Caught three production-fatal bugs (lz4, greenlet, lifespan instrumentation) that no unit test could reach |
 | 2026-08-26 | Per-user isolation confirmed (ADR-0016); object keys gain an owner prefix; Phase 3 gains auth/quota tasks and a Phase 14 for load testing | The user confirmed real-world intent and load testing, making tenancy a design input rather than a retrofit |
 | 2026-08-26 | Phase 2 contracts library landed; `make unit` green with 71 tests, `make lint` clean | The ADR-0004 eviction loop is now covered by unit tests rather than only by prose |
