@@ -82,6 +82,15 @@ SMOKE PASSED — Kafka, Postgres and MinIO are usable
 ```
 
 27 topics created from `infra/topics.json` (7 declared + retry tiers + DLQs).
+Re-running `make topics` reports `0 created, 27 already present` — the idempotent
+path is the one that runs every day, so it is verified rather than assumed.
+
+`make obs-up` also verified (not part of the gate, but an unrun compose file is a
+liability): all 8 containers healthy, Grafana provisioned with both datasources,
+OTel collector accepting OTLP on 4317/4318, and **kafka-exporter scraping for
+real** — Prometheus reports `kafka_brokers=1` and 27 topics, so the consumer-lag
+panel of ADR-0010 will have data the moment a consumer group exists. The `api`
+and `workers` scrape targets read DOWN, as intended until Phase 3.
 
 The phase stays `[~]` rather than `[x]`: the gate passes, but three checkboxes
 presuppose services that do not exist. They move to Phase 2 rather than being
