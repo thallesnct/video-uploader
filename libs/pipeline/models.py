@@ -10,7 +10,17 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, Numeric, String, UniqueConstraint, func
+from sqlalchemy import (
+    BigInteger,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -105,4 +115,33 @@ class RenditionRow(Base):
         UniqueConstraint("video_id", "rendition", name="uq_renditions_video_rendition"),
         Index("ix_renditions_video", "video_id"),
         Index("ix_renditions_owner_status", "owner_id", "status"),
+    )
+
+
+class EventRow(Base):
+    """Append-only log backing SSE `Last-Event-ID` replay (ADR-0007, ADR-0008).
+
+    Written by the projector, in the same transaction as its videos/renditions
+    upsert, before the Kafka offset is committed. `event_id` is unique so a
+    replayed partition (crash between the DB commit and the offset commit)
+    inserts nothing twice — the same idempotency shape as the upserts it sits
+    next to, not a separate mechanism.
+    """
+
+    __tablename__ = "events"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    video_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("videos.id"), nullable=False
+    )
+    event_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False, unique=True)
+    type: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        # The SSE resume query: "everything for this video after id N".
+        Index("ix_events_video_id", "video_id", "id"),
     )
