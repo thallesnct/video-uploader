@@ -68,6 +68,12 @@ Downloads and playback also use presigned GETs, so the API is never a media prox
   (start at 6 h for multipart, 15 min for simple PUT).
 - An upload that never calls `/complete` leaves an orphan; a lifecycle rule
   expires `tmp/` and unclaimed sources, coordinated with retry windows (ADR-0001).
+- **MinIO and S3 differ on aborting incomplete multipart uploads.** S3 expects an
+  `AbortIncompleteMultipartUpload` lifecycle rule; MinIO rejects that rule and
+  purges stale uploads server-side via `api stale_uploads_expiry` (24 h default).
+  The dev bootstrap relies on the MinIO behaviour, so the production deployment
+  on real S3 must add the lifecycle rule explicitly or abandoned multipart parts
+  accumulate and are billed indefinitely.
 - Because the client writes directly, **the object key is the trust boundary**:
   the presign must pin the exact key, and `/complete` must verify rather than
   trust the client's claim.
