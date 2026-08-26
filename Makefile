@@ -61,8 +61,26 @@ obs-verify: ## Dashboards provision, traces span all stages, lag panel live
 unit: ## Fast tests, no I/O, no containers
 	$(RUN) pytest tests/unit $(ARGS)
 
+# Integration tests drive testcontainers, so they need the Docker socket and
+# cannot run inside the uv container. They use host uv when present, otherwise a
+# project-local venv — nothing is installed outside this directory.
+HOST_VENV := .venv-host
+$(HOST_VENV)/bin/pytest:
+	python3 -m venv $(HOST_VENV)
+	$(HOST_VENV)/bin/pip install -q -U pip
+	$(HOST_VENV)/bin/pip install -q -e ".[dev]"
+
+ifdef UV
+  RUN_HOST := uv run --extra dev
+else
+  RUN_HOST := $(HOST_VENV)/bin/python -m
+endif
+
 integration: ## Tests against real Kafka/Postgres/MinIO via testcontainers
-	@echo "not implemented until Phase 3" && exit 1
+ifndef UV
+	@$(MAKE) --no-print-directory $(HOST_VENV)/bin/pytest
+endif
+	$(RUN_HOST) pytest tests/integration $(ARGS)
 
 e2e: ## Full compose + Playwright
 	@echo "not implemented until Phase 8" && exit 1

@@ -50,6 +50,7 @@ dev = [
   "hypothesis>=6.100",
   "freezegun>=1.5",
   "testcontainers[kafka,postgres]>=4.8",
+  "requests>=2.32",
   "ruff>=0.6",
   "mypy>=1.11",
 ]
