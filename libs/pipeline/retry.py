@@ -70,15 +70,27 @@ class RetryPolicy:
             raise ValueError(f"retry tiers must increase in delay, got {tiers}")
         self.tiers = tiers
 
-    def route(self, source_topic: str, failure: FailureClass, retry_count: int) -> str:
-        """The topic a failed message should be produced to.
+    def route(
+        self, source_topic: str, failure: FailureClass, retry_count: int, *, retryable: bool = True
+    ) -> str | None:
+        """The topic a failed message should be produced to, or None.
 
         source_topic is the ORIGINAL topic, not the retry topic the message was
         consumed from, so the ladder does not compound into names like
         'x.retry.10s.retry.1m'.
+
+        retryable is False for topics like video.status/pipeline.failed, which
+        have no timed retry ladder (ADR-0005 follow-on) because their consumers
+        only ever perform a cheap idempotent upsert. A TRANSIENT failure there
+        returns None: there is nowhere to produce it, and the caller must leave
+        the offset uncommitted so normal redelivery retries it. TERMINAL/POISON
+        failures still dead-letter regardless — an unparseable message left
+        uncommitted forever would livelock the partition behind it.
         """
         if failure in (FailureClass.TERMINAL, FailureClass.POISON):
             return f"{source_topic}.dlq"
+        if not retryable:
+            return None
         if retry_count >= len(self.tiers):
             return f"{source_topic}.dlq"
         return f"{source_topic}.retry.{self.tiers[retry_count]}"

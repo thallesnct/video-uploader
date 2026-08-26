@@ -82,3 +82,22 @@ def test_source_topic_is_recovered_from_a_retry_topic(topic: str, expected: str)
 def test_dlq_is_recognised() -> None:
     assert POLICY.is_dlq("video.uploaded.dlq")
     assert not POLICY.is_dlq("video.uploaded.retry.1m")
+
+
+def test_transient_failure_on_a_non_retryable_topic_returns_no_destination() -> None:
+    """video.status/pipeline.failed have no retry ladder (ADR-0005 follow-on):
+    nowhere to produce, so the caller must leave the offset uncommitted."""
+    assert POLICY.route("video.status", FailureClass.TRANSIENT, 0, retryable=False) is None
+
+
+def test_terminal_failure_on_a_non_retryable_topic_still_reaches_a_dlq() -> None:
+    """A DLQ always exists, independent of the retries flag — only the timed
+    ladder is skipped for a non-retryable topic."""
+    assert (
+        POLICY.route("video.status", FailureClass.TERMINAL, 0, retryable=False)
+        == "video.status.dlq"
+    )
+    assert (
+        POLICY.route("video.status", FailureClass.POISON, 0, retryable=False)
+        == "video.status.dlq"
+    )

@@ -35,7 +35,7 @@ from pipeline.obs import (
 from pipeline.producer import EventProducer
 from pipeline.retry import FailureClass, RetryPolicy, classify, source_topic_of
 from pipeline.settings import kafka_settings
-from pipeline.topics import PIPELINE_FAILED
+from pipeline.topics import PIPELINE_FAILED, REGISTRY
 
 log = logging.getLogger(__name__)
 
@@ -225,7 +225,8 @@ class StageWorker:
             self._consumer.resume(paused)
 
         if error is not None:
-            self._route_failure(raw, error)
+            if not self._route_failure(raw, error):
+                return
         self._commit(raw)
 
     def _heartbeat_until(self, future: Future[None]) -> None:
@@ -251,17 +252,32 @@ class StageWorker:
             event = parse(view.value)
             self._handler(event, view)
 
-    def _route_failure(self, raw: Any, error: BaseException) -> None:
+    def _route_failure(self, raw: Any, error: BaseException) -> bool:
         """Send the message to its next retry tier or the DLQ.
 
         Produced and flushed BEFORE the offset is committed: committing first
         would lose the message entirely if the produce failed.
+
+        Returns whether the caller may commit the offset. False means a
+        TRANSIENT failure on a topic with no retry ladder (ADR-0005
+        follow-on): nothing was produced, and the message must be left
+        uncommitted so normal redelivery retries it on the next poll.
         """
         view = MessageView(raw)
         failure = classify(error)
         origin = source_topic_of(view.topic)
         retry_count = view.retry_count
-        destination = self._policy.route(origin, failure, retry_count)
+        retryable = REGISTRY[origin].retries if origin in REGISTRY else True
+        destination = self._policy.route(origin, failure, retry_count, retryable=retryable)
+
+        if destination is None:
+            log.warning(
+                "transient failure on non-retryable topic %s; leaving uncommitted "
+                "for redelivery: %s",
+                origin,
+                error,
+            )
+            return False
 
         headers = [(key, value) for key, value in view.headers if key != "retry_count"]
         headers += [
@@ -293,6 +309,7 @@ class StageWorker:
                 retry_count + 1,
                 error,
             )
+        return True
 
     def _emit_pipeline_failed(
         self, view: MessageView, error: BaseException, retry_count: int

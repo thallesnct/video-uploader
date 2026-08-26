@@ -21,16 +21,19 @@ def test_declared_topics_match_the_adr_table() -> None:
         assert registry[name].partitions["dev"] == partitions
 
 
-def test_every_topic_with_retries_gets_a_full_ladder_and_a_dlq() -> None:
+def test_every_topic_gets_a_dlq_but_only_retryable_ones_get_a_ladder() -> None:
+    """A DLQ always exists (ADR-0005 follow-on): a poison/terminal message
+    needs somewhere to land even on a topic with no timed retry ladder."""
     registry = topics.REGISTRY
     planned = {plan.name for plan in registry.plan("dev")}
 
     for spec in registry.declared:
         assert spec.name in planned
-        if not spec.retries:
-            assert spec.dlq_topic not in planned
-            continue
         assert spec.dlq_topic in planned
+        if not spec.retries:
+            for tier in registry.retry_tiers:
+                assert spec.retry_topic(tier) not in planned
+            continue
         for tier in registry.retry_tiers:
             assert spec.retry_topic(tier) in planned
 

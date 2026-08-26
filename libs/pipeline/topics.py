@@ -102,19 +102,21 @@ class TopicRegistry:
                     {**base_configs, "retention.ms": str(spec.retention_ms)},
                 )
             )
-            if not spec.retries:
-                continue
-            # Retry tiers carry less traffic than the topic they serve, and a
-            # DLQ should be receiving almost nothing at all.
-            for tier in self.retry_tiers:
-                plans.append(
-                    TopicPlan(
-                        spec.retry_topic(tier),
-                        max(1, partitions // 2),
-                        rf,
-                        {**base_configs, "retention.ms": str(spec.retention_ms)},
+            if spec.retries:
+                # Retry tiers carry less traffic than the topic they serve.
+                for tier in self.retry_tiers:
+                    plans.append(
+                        TopicPlan(
+                            spec.retry_topic(tier),
+                            max(1, partitions // 2),
+                            rf,
+                            {**base_configs, "retention.ms": str(spec.retention_ms)},
+                        )
                     )
-                )
+            # A DLQ always exists, independent of the retries flag: a poison or
+            # terminal message needs somewhere to land even on a topic with no
+            # timed retry ladder (ADR-0005 follow-on), and it should be
+            # receiving almost nothing at all either way.
             plans.append(
                 TopicPlan(
                     spec.dlq_topic,

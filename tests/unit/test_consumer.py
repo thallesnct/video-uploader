@@ -332,3 +332,36 @@ async def test_async_producer_refuses_to_publish_before_start() -> None:
     )
     with pytest.raises(RuntimeError, match="start"):
         await producer.publish("video.status", event)
+
+
+def test_transient_failure_on_a_non_retryable_topic_is_left_uncommitted() -> None:
+    """video.status/pipeline.failed have no retry ladder or DLQ topology check
+    that would tolerate producing to a nonexistent x.retry.10s topic (ADR-0005
+    follow-on). Instead nothing is produced and the offset is left uncommitted
+    so the next poll redelivers it — cheap for an idempotent upsert."""
+    consumer = FakeConsumer([a_message(topic="video.status")])
+    producer = FakeProducer()
+
+    def handler(event: events.Event, view: object) -> None:
+        raise TransientError("db unavailable")
+
+    handled = build(consumer, handler, producer).run(max_messages=1)
+
+    assert handled == 1
+    assert producer.published == []
+    assert consumer.commits == []
+
+
+def test_terminal_failure_on_a_non_retryable_topic_still_reaches_a_dlq() -> None:
+    """A DLQ always exists regardless of the retries flag — only the timed
+    ladder is skipped for a non-retryable topic like video.status."""
+    consumer = FakeConsumer([a_message(topic="video.status")])
+    producer = FakeProducer()
+
+    def handler(event: events.Event, view: object) -> None:
+        raise TerminalError("corrupt status event")
+
+    build(consumer, handler, producer).run(max_messages=1)
+
+    assert producer.published[0][0] == "video.status.dlq"
+    assert len(consumer.commits) == 1

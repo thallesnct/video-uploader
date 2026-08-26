@@ -45,24 +45,25 @@ def planned_topics(registry: dict) -> list[dict]:
                 },
             }
         )
-        if not spec.get("retries"):
-            continue
-        # Retry tiers are non-blocking (ADR-0005): a delayed message must never
-        # hold up the partition it came from, so each tier is its own topic.
-        for tier in registry["retry_tiers"]:
-            out.append(
-                {
-                    "name": f"{spec['name']}.retry.{tier}",
-                    "partitions": max(1, spec["partitions"][PROFILE] // 2),
-                    "replication_factor": rf,
-                    "configs": {
-                        "retention.ms": str(spec["retention_ms"]),
-                        "min.insync.replicas": str(min_isr),
-                    },
-                }
-            )
-        # DLQ keeps messages far longer than the pipeline: someone has to be able
-        # to come back on Monday and replay them.
+        if spec.get("retries"):
+            # Retry tiers are non-blocking (ADR-0005): a delayed message must
+            # never hold up the partition it came from, so each tier is its
+            # own topic.
+            for tier in registry["retry_tiers"]:
+                out.append(
+                    {
+                        "name": f"{spec['name']}.retry.{tier}",
+                        "partitions": max(1, spec["partitions"][PROFILE] // 2),
+                        "replication_factor": rf,
+                        "configs": {
+                            "retention.ms": str(spec["retention_ms"]),
+                            "min.insync.replicas": str(min_isr),
+                        },
+                    }
+                )
+        # DLQ always exists, independent of the retries flag (ADR-0005
+        # follow-on) — someone has to be able to come back on Monday and
+        # replay a poison/terminal message even off a topic with no ladder.
         out.append(
             {
                 "name": f"{spec['name']}.dlq",
