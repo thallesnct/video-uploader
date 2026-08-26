@@ -74,6 +74,21 @@ services:
       timeout: 5s
       retries: 20
 
+  # One-shot MinIO client for bucket bootstrap. profiles: keeps it out of `up`;
+  # it runs via `docker compose run --rm mc "<command>"`.
+  mc:
+    image: minio/mc:latest
+    container_name: vp-mc
+    profiles: ["tools"]
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      S3_BUCKET: ${S3_BUCKET}
+
 volumes:
   kafka-data:
   pg-data:
