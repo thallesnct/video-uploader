@@ -85,9 +85,10 @@ def insert_video_row(sessions_factory: Any, video_id: uuid.UUID) -> None:
     which in production is always true, since the probe/transcode stages only
     ever run after the API creates it at upload time (Phase 3). Tests that skip
     the API and publish straight to Kafka must recreate that precondition."""
+    from pipeline.db import sync_session_scope
     from pipeline.models import VideoRow
 
-    with sessions_factory() as session:
+    with sync_session_scope(sessions_factory) as session:
         session.add(
             VideoRow(
                 id=video_id,
@@ -99,7 +100,6 @@ def insert_video_row(sessions_factory: Any, video_id: uuid.UUID) -> None:
                 status="uploaded",
             )
         )
-        session.commit()
 
 
 # ------------------------------------------------------------------ happy path

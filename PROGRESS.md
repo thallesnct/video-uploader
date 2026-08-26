@@ -415,6 +415,15 @@ Refs: ADR-0015
 - [ ] Migrations backward compatible for one release; run as a pre-deploy job
 - [ ] SLOs defined; alerts fire on symptoms (lag, DLQ depth, SLO burn)
 - [ ] README quickstart; ADR index current; PLAN.md diagram matches reality
+- [ ] **Known gap from Phase 5** — `RenditionRepository.claim()`'s stale window
+      (`STALE_AFTER = 2h`) is longer than the retry ladder's total span
+      (10s/1m/10m). If a worker crashes mid-claim, siblings retrying the same
+      rendition hit `TransientError` (claim denied) on every attempt and the
+      message DLQs before the 2h stale window ever frees the claim — even
+      though nothing is actually wrong with the rendition. Fix by shortening
+      `STALE_AFTER` to comfortably less than the retry ladder's span, or by
+      widening the ladder, so a crashed sibling's claim frees before the
+      message dead-letters.
 
 **Gate:** `make ci` green from a clean clone on a machine with only Docker, plus
 `make security-verify` — images scan clean at the agreed severity, containers run
