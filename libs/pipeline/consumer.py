@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any, Protocol
@@ -161,6 +162,25 @@ class StageWorker:
     def revoked(self) -> bool:
         """True when our partitions were taken away since this message started."""
         return self._revoked.is_set()
+
+    def wait_for_assignment(self, timeout: float = 30.0) -> list[Any]:
+        """Poll until the group gives us partitions.
+
+        Useful at startup for an honest "ready" signal, and essential in tests:
+        publishing before assignment against `auto.offset.reset=latest` means the
+        message lands before anyone is listening and the worker waits forever.
+
+        Anything delivered while waiting is stashed rather than dropped.
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            assignment = list(self._consumer.assignment())
+            if assignment:
+                return assignment
+            raw = self._consumer.poll(0.5)
+            if raw is not None and not raw.error():
+                self._pending.append(raw)
+        raise TimeoutError(f"no partitions assigned within {timeout}s")
 
     def stop(self) -> None:
         """Ask the loop to finish the message in flight and exit (SIGTERM path)."""
