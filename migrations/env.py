@@ -25,8 +25,9 @@ if not database_url:
 # Alembic runs synchronously; strip the async driver if one was configured.
 config.set_main_option("sqlalchemy.url", database_url.replace("+asyncpg", "+psycopg"))
 
-# Phase 6 points this at the models' MetaData to enable autogenerate.
-target_metadata = None
+from pipeline.models import Base  # noqa: E402
+
+target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
