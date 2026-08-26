@@ -82,10 +82,12 @@ class RetryPolicy:
         retryable is False for topics like video.status/pipeline.failed, which
         have no timed retry ladder (ADR-0005 follow-on) because their consumers
         only ever perform a cheap idempotent upsert. A TRANSIENT failure there
-        returns None: there is nowhere to produce it, and the caller must leave
-        the offset uncommitted so normal redelivery retries it. TERMINAL/POISON
-        failures still dead-letter regardless — an unparseable message left
-        uncommitted forever would livelock the partition behind it.
+        returns None: there is nowhere to produce it, and the caller must let
+        the failure propagate and crash rather than commit past it — Kafka
+        offsets are monotonic, so silently continuing would let a later
+        commit skip this message forever. TERMINAL/POISON failures still
+        dead-letter regardless — an unparseable message that crashed the
+        worker forever would livelock the partition behind it.
         """
         if failure in (FailureClass.TERMINAL, FailureClass.POISON):
             return f"{source_topic}.dlq"

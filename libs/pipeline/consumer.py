@@ -224,8 +224,8 @@ class StageWorker:
         finally:
             self._consumer.resume(paused)
 
-        if error is not None and not self._route_failure(raw, error):
-            return
+        if error is not None:
+            self._route_failure(raw, error)
         self._commit(raw)
 
     def _heartbeat_until(self, future: Future[None]) -> None:
@@ -251,16 +251,20 @@ class StageWorker:
             event = parse(view.value)
             self._handler(event, view)
 
-    def _route_failure(self, raw: Any, error: BaseException) -> bool:
+    def _route_failure(self, raw: Any, error: BaseException) -> None:
         """Send the message to its next retry tier or the DLQ.
 
         Produced and flushed BEFORE the offset is committed: committing first
         would lose the message entirely if the produce failed.
 
-        Returns whether the caller may commit the offset. False means a
-        TRANSIENT failure on a topic with no retry ladder (ADR-0005
-        follow-on): nothing was produced, and the message must be left
-        uncommitted so normal redelivery retries it on the next poll.
+        Raises the original error for a TRANSIENT failure on a topic with no
+        retry ladder (ADR-0005 follow-on) instead of returning: Kafka offsets
+        are monotonic, so silently continuing to poll and later committing a
+        *later* message would move the committed offset past this one forever
+        — there is no "come back to it" once that happens. Letting the
+        exception crash the worker is the only way to guarantee redelivery:
+        the process restarts and resumes from the last committed offset,
+        which is still before this message.
         """
         view = MessageView(raw)
         failure = classify(error)
@@ -270,13 +274,13 @@ class StageWorker:
         destination = self._policy.route(origin, failure, retry_count, retryable=retryable)
 
         if destination is None:
-            log.warning(
-                "transient failure on non-retryable topic %s; leaving uncommitted "
-                "for redelivery: %s",
+            log.error(
+                "unroutable transient failure on non-retryable topic %s; "
+                "crashing so a restart redelivers from the last commit: %s",
                 origin,
                 error,
             )
-            return False
+            raise error
 
         headers = [(key, value) for key, value in view.headers if key != "retry_count"]
         headers += [
@@ -308,7 +312,6 @@ class StageWorker:
                 retry_count + 1,
                 error,
             )
-        return True
 
     def _emit_pipeline_failed(
         self, view: MessageView, error: BaseException, retry_count: int

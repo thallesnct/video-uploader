@@ -108,12 +108,40 @@ Two changes:
   separate concerns that happened to share one boolean.
 - **`RetryPolicy.route()` takes a `retryable` flag.** For a `TRANSIENT` failure
   on a non-retryable topic it returns `None`: no retry topic, no DLQ, nothing
-  produced. `StageWorker` reads this as "leave the offset uncommitted" — the
-  message is redelivered on the next poll, which is nearly free for an
-  idempotent upsert and does not compound the way a blind commit-and-drop
-  would. `TERMINAL`/`POISON` failures are unaffected: they still route straight
-  to the (now always-present) DLQ, because an unparseable message left
-  uncommitted forever would livelock the partition behind it.
+  to produce to. `TERMINAL`/`POISON` failures are unaffected: they still route
+  straight to the (now always-present) DLQ, because an unparseable message
+  left unhandled forever would livelock the partition behind it.
+
+**Corrected mid-implementation:** the first version of this decision had
+`StageWorker` leave the offset uncommitted and keep polling forward when
+`route()` returned `None`. That is broken. A consumer's fetch position
+advances on every `poll()` regardless of commits; only the *committed* offset
+is what a restart resumes from. "Leave it uncommitted and move on" means the
+next *successful* commit — for a later, unrelated message — advances the
+committed offset past the failed one, permanently. Kafka offsets are
+monotonic: there is no mechanism to "come back" for a skipped message once
+that happens. Under a real transient outage (the DB blips for even a few
+seconds) this would silently drop every message that failed during the
+window, the opposite of "safe to redeliver."
+
+The actual fix: **`_route_failure` raises the original error when there is no
+route**, and nothing catches it. This crashes the worker's `run()` loop and
+propagates out of `main()`, terminating the process before it can poll past
+the message. Restarting resumes the consumer group from the last *committed*
+offset — still before the failed message — so it is redelivered correctly.
+This is deliberately a coarse retry (a whole-process restart, not an in-place
+backoff) but it is the only mechanism available without a retry-tier topic to
+absorb the message, and it composes with Option B's rejection below.
+
+Considered and rejected: giving `video.status`/`pipeline.failed` a normal
+retry ladder after all (i.e. reverting to `retries: true`). Rejected because
+`video.status` is ordered per-video (ADR-0002) specifically so state
+transitions apply in order; routing a failed message through a retry-tier
+topic reintroduces it out of order relative to whatever was published to the
+main topic in the meantime, turning a stale `probed` landing after
+`transcoding` into normal-flow behavior rather than the rare, documented
+DLQ-replay case above. There is also no retry-pump service yet to drain a
+timed retry topic even if one existed.
 
 `infra/bootstrap_topics.py` reimplements `TopicRegistry.plan()`'s derivation by
 hand (it is a stdlib-only script that runs before the venv exists) and was
@@ -122,9 +150,18 @@ exists to prevent.
 
 ### Consequences
 
-- A stage with `retries: false` must be safe to redeliver indefinitely on
-  transient failure — true today only for upsert-shaped consumers (projector).
-  A future non-retryable topic with a non-idempotent consumer would need its
-  own review before relying on this behavior.
+- A crash-to-retry topic needs something to restart it. No such orchestrator
+  exists yet for `projector` — it is deliberately not wired into
+  `docker-compose.yml` (Phase 13, alongside the other workers). Until then, a
+  transient DB failure stops the projector and requires a manual restart; this
+  is acceptable for a not-yet-deployed service and must be revisited before
+  Phase 13 calls this done.
+- Any exception a non-retryable-topic handler can raise must be correctly
+  classified. A TRANSIENT misclassification of what is actually a permanent
+  condition (e.g. a foreign-key violation from a genuinely missing row) turns
+  into an infinite crash-restart loop on the same message, blocking the
+  partition forever. The projector's handler explicitly reclassifies
+  SQLAlchemy `IntegrityError` as `TerminalError` for exactly this reason —
+  see its docstring.
 - No change for any existing `retries: true` topic or stage; every current
   worker's retry/DLQ behavior is unchanged, verified by the existing test suite.
