@@ -1,4 +1,5 @@
 """The contract tests that substitute for a schema registry (ADR-0003)."""
+
 from __future__ import annotations
 
 import json
@@ -6,7 +7,6 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
-
 from pipeline import events
 
 
@@ -53,8 +53,12 @@ def test_unknown_type_is_poison_not_a_retry() -> None:
 
 def test_parse_as_rejects_the_wrong_event_on_a_topic() -> None:
     raw = events.VideoUploaded(
-        video_id=uuid4(), producer="api", object_key="k",
-        filename="f.mp4", size_bytes=1, content_type="video/mp4",
+        video_id=uuid4(),
+        producer="api",
+        object_key="k",
+        filename="f.mp4",
+        size_bytes=1,
+        content_type="video/mp4",
     ).serialize()
 
     with pytest.raises(events.UnknownEventType):
@@ -87,8 +91,11 @@ def test_defaults_are_populated() -> None:
 def test_rendition_shape_is_validated(bad: str) -> None:
     with pytest.raises(ValueError, match="rendition"):
         events.RenditionRequested(
-            video_id=uuid4(), producer="probe",
-            rendition=bad, source_key="s", target_key="t",
+            video_id=uuid4(),
+            producer="probe",
+            rendition=bad,
+            source_key="s",
+            target_key="t",
         )
 
 

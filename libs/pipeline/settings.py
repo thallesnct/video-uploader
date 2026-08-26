@@ -5,6 +5,7 @@ process at startup with the variable named, rather than surfacing as a
 confusing failure on the first request hours later. Nothing outside this module
 reads os.environ.
 """
+
 from __future__ import annotations
 
 from functools import lru_cache
@@ -47,8 +48,9 @@ class S3Settings(BaseSettings):
         validation_alias=AliasChoices("S3_ACCESS_KEY", "MINIO_ROOT_USER", "AWS_ACCESS_KEY_ID")
     )
     secret_key: str = Field(
-        validation_alias=AliasChoices("S3_SECRET_KEY", "MINIO_ROOT_PASSWORD",
-                                      "AWS_SECRET_ACCESS_KEY")
+        validation_alias=AliasChoices(
+            "S3_SECRET_KEY", "MINIO_ROOT_PASSWORD", "AWS_SECRET_ACCESS_KEY"
+        )
     )
     # Long enough for a multi-GB upload on a slow connection (ADR-0006).
     presign_put_expiry_s: int = 6 * 3600

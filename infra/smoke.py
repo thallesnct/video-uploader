@@ -8,13 +8,13 @@ MinIO refusing the browser's preflight because CORS was never configured.
 
 Deliberately dependency-free — it runs on a bare host with only Docker.
 """
+
 from __future__ import annotations
 
 import json
 import pathlib
 import socket
 import subprocess
-import sys
 import urllib.error
 import urllib.request
 
@@ -47,9 +47,7 @@ def port_open(host: str, port: int, timeout: float = 3.0) -> bool:
 
 
 def compose(*args: str) -> tuple[int, str]:
-    proc = subprocess.run(
-        ["docker", "compose", *args], capture_output=True, text=True, cwd=ROOT
-    )
+    proc = subprocess.run(["docker", "compose", *args], capture_output=True, text=True, cwd=ROOT)
     return proc.returncode, proc.stdout + proc.stderr
 
 
@@ -59,12 +57,14 @@ def main() -> int:
     kafka_port = int(cfg.get("KAFKA_EXTERNAL_PORT", "29092"))
     # The external listener is what tests and host tooling dial; a broker bound
     # only to its container hostname passes a healthcheck and still fails here.
-    check(f"external listener reachable on localhost:{kafka_port}",
-          port_open("localhost", kafka_port))
+    check(
+        f"external listener reachable on localhost:{kafka_port}", port_open("localhost", kafka_port)
+    )
 
     registry = json.loads((ROOT / "libs" / "pipeline" / "topics.json").read_text())
-    code, out = compose("exec", "-T", "kafka", "kafka-topics",
-                        "--bootstrap-server", "localhost:9092", "--describe")
+    code, out = compose(
+        "exec", "-T", "kafka", "kafka-topics", "--bootstrap-server", "localhost:9092", "--describe"
+    )
     actual: dict[str, int] = {}
     for line in out.splitlines():
         if line.startswith("Topic:") and "PartitionCount:" in line:
@@ -82,24 +82,48 @@ def main() -> int:
         got = actual.get(spec["name"])
         if got != want:
             wrong.append(f"{spec['name']} want={want} got={got}")
-    check(f"{len(registry['topics'])} declared topics exist with the right partition counts",
-          not wrong, "; ".join(wrong))
+    check(
+        f"{len(registry['topics'])} declared topics exist with the right partition counts",
+        not wrong,
+        "; ".join(wrong),
+    )
 
-    dlq_missing = [f"{s['name']}.dlq" for s in registry["topics"]
-                   if s.get("retries") and f"{s['name']}.dlq" not in actual]
+    dlq_missing = [
+        f"{s['name']}.dlq"
+        for s in registry["topics"]
+        if s.get("retries") and f"{s['name']}.dlq" not in actual
+    ]
     check("retry and DLQ topics exist", not dlq_missing, ", ".join(dlq_missing))
 
     # ADR-0002: a typo must fail loudly rather than conjure a dead topic.
-    code, out = compose("exec", "-T", "kafka", "kafka-topics",
-                        "--bootstrap-server", "localhost:9092",
-                        "--describe", "--topic", "smoke.should.not.autocreate")
+    code, out = compose(
+        "exec",
+        "-T",
+        "kafka",
+        "kafka-topics",
+        "--bootstrap-server",
+        "localhost:9092",
+        "--describe",
+        "--topic",
+        "smoke.should.not.autocreate",
+    )
     check("auto topic creation is disabled", code != 0)
 
     print("postgres")
     pg_port = int(cfg.get("POSTGRES_PORT", "5432"))
     check(f"accepting connections on localhost:{pg_port}", port_open("localhost", pg_port))
-    code, out = compose("exec", "-T", "postgres", "psql", "-U", cfg["POSTGRES_USER"],
-                        "-d", cfg["POSTGRES_DB"], "-tAc", "select 1")
+    code, out = compose(
+        "exec",
+        "-T",
+        "postgres",
+        "psql",
+        "-U",
+        cfg["POSTGRES_USER"],
+        "-d",
+        cfg["POSTGRES_DB"],
+        "-tAc",
+        "select 1",
+    )
     check("query executes", code == 0 and "1" in out, out.strip()[:80] if code else "")
 
     print("minio")
@@ -112,9 +136,14 @@ def main() -> int:
         live = False
     check("health endpoint live", live)
 
-    code, out = compose("run", "--rm", "-T", "mc",
-                        f'mc alias set local http://minio:9000 "$MINIO_ROOT_USER" '
-                        f'"$MINIO_ROOT_PASSWORD" >/dev/null && mc ls local/{bucket}')
+    code, out = compose(
+        "run",
+        "--rm",
+        "-T",
+        "mc",
+        f'mc alias set local http://minio:9000 "$MINIO_ROOT_USER" '
+        f'"$MINIO_ROOT_PASSWORD" >/dev/null && mc ls local/{bucket}',
+    )
     check(f"bucket '{bucket}' exists", code == 0)
 
     # ADR-0006 calls missing CORS the classic first-run failure: the browser PUTs
@@ -124,10 +153,13 @@ def main() -> int:
     allow = ""
     if origin:
         request = urllib.request.Request(
-            f"{api}/{bucket}/smoke-preflight-probe", method="OPTIONS",
-            headers={"Origin": origin,
-                     "Access-Control-Request-Method": "PUT",
-                     "Access-Control-Request-Headers": "content-type"},
+            f"{api}/{bucket}/smoke-preflight-probe",
+            method="OPTIONS",
+            headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "PUT",
+                "Access-Control-Request-Headers": "content-type",
+            },
         )
         try:
             with urllib.request.urlopen(request, timeout=5) as resp:
@@ -136,8 +168,11 @@ def main() -> int:
             allow = exc.headers.get("Access-Control-Allow-Origin", "")
         except (urllib.error.URLError, TimeoutError):
             allow = ""
-    check(f"CORS preflight allows browser origin {origin}",
-          allow in (origin, "*"), f"Access-Control-Allow-Origin: {allow or '(absent)'}")
+    check(
+        f"CORS preflight allows browser origin {origin}",
+        allow in (origin, "*"),
+        f"Access-Control-Allow-Origin: {allow or '(absent)'}",
+    )
 
     print()
     if FAILURES:

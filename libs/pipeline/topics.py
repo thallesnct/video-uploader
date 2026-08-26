@@ -5,12 +5,13 @@ directly on a bare host with nothing installed, so nothing here may depend on
 pydantic or any third-party package. Keeping the bootstrap and the application
 on the same code is what stops broker reality from drifting away from ADR-0002.
 """
+
 from __future__ import annotations
 
 import json
 import pathlib
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 REGISTRY_PATH = pathlib.Path(__file__).with_name("topics.json")
 
@@ -51,7 +52,7 @@ class TopicPlan:
 
 
 class TopicRegistry:
-    def __init__(self, raw: dict) -> None:
+    def __init__(self, raw: dict[str, Any]) -> None:
         self._raw = raw
         self.retry_tiers: tuple[str, ...] = tuple(raw["retry_tiers"])
         self._specs = {
@@ -94,8 +95,12 @@ class TopicRegistry:
         for spec in self._specs.values():
             partitions = spec.partitions[profile]
             plans.append(
-                TopicPlan(spec.name, partitions, rf,
-                          {**base_configs, "retention.ms": str(spec.retention_ms)})
+                TopicPlan(
+                    spec.name,
+                    partitions,
+                    rf,
+                    {**base_configs, "retention.ms": str(spec.retention_ms)},
+                )
             )
             if not spec.retries:
                 continue
@@ -103,12 +108,20 @@ class TopicRegistry:
             # DLQ should be receiving almost nothing at all.
             for tier in self.retry_tiers:
                 plans.append(
-                    TopicPlan(spec.retry_topic(tier), max(1, partitions // 2), rf,
-                              {**base_configs, "retention.ms": str(spec.retention_ms)})
+                    TopicPlan(
+                        spec.retry_topic(tier),
+                        max(1, partitions // 2),
+                        rf,
+                        {**base_configs, "retention.ms": str(spec.retention_ms)},
+                    )
                 )
             plans.append(
-                TopicPlan(spec.dlq_topic, max(1, partitions // 4), rf,
-                          {**base_configs, "retention.ms": str(DLQ_RETENTION_MS)})
+                TopicPlan(
+                    spec.dlq_topic,
+                    max(1, partitions // 4),
+                    rf,
+                    {**base_configs, "retention.ms": str(DLQ_RETENTION_MS)},
+                )
             )
         return plans
 

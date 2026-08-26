@@ -1,10 +1,10 @@
 """Configuration must fail at startup, not on the first request (ADR-0015)."""
+
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
-
 from pipeline import settings
+from pydantic import ValidationError
 
 # Read only what each test sets: the repo's own .env must not leak in and make a
 # missing-variable test pass by accident.
@@ -12,8 +12,14 @@ NO_ENV_FILE = {"_env_file": None}
 
 
 def test_missing_credentials_fail_fast(monkeypatch: pytest.MonkeyPatch) -> None:
-    for var in ("S3_ACCESS_KEY", "S3_SECRET_KEY", "MINIO_ROOT_USER",
-                "MINIO_ROOT_PASSWORD", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"):
+    for var in (
+        "S3_ACCESS_KEY",
+        "S3_SECRET_KEY",
+        "MINIO_ROOT_USER",
+        "MINIO_ROOT_PASSWORD",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+    ):
         monkeypatch.delenv(var, raising=False)
 
     with pytest.raises(ValidationError) as excinfo:

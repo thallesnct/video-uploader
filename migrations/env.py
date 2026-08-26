@@ -4,6 +4,7 @@ The read model's tables arrive in Phase 6 (ADR-0007); this baseline exists so
 migrations are wired from the start and the first schema change is a normal,
 reviewable revision rather than a scramble.
 """
+
 from __future__ import annotations
 
 import os

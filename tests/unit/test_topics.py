@@ -1,4 +1,5 @@
 """The registry is shared by infra scripts and services, so drift is a real risk."""
+
 from __future__ import annotations
 
 from pipeline import topics

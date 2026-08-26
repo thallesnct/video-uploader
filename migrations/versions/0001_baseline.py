@@ -7,6 +7,7 @@ Create Date: 2026-08-26
 Deliberately empty. It establishes the alembic_version table so Phase 6's read
 model (ADR-0007) lands as an ordinary revision on top of a known starting point.
 """
+
 from __future__ import annotations
 
 revision: str = "0001_baseline"

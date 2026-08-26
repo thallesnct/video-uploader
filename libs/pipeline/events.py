@@ -8,6 +8,7 @@ adding an optional field is free, and consumers ignore fields they do not know,
 so a new producer can ship before its consumers. Removing or retyping a field is
 breaking: bump SCHEMA_VERSION, write an ADR, dual-read for a release.
 """
+
 from __future__ import annotations
 
 import json
@@ -140,7 +141,7 @@ class VideoStatusChanged(Event):
 
 
 EVENT_TYPES: dict[str, type[Event]] = {
-    cls.model_fields["type"].default: cls  # type: ignore[misc]
+    cls.model_fields["type"].default: cls
     for cls in (
         VideoUploaded,
         VideoProbed,
@@ -178,7 +179,5 @@ def parse_as(raw: bytes | str, expected: type[E]) -> E:
     """Parse and assert the concrete type, for consumers of a single topic."""
     event = parse(raw)
     if not isinstance(event, expected):
-        raise UnknownEventType(
-            f"expected {expected.__name__}, got {type(event).__name__}"
-        )
+        raise UnknownEventType(f"expected {expected.__name__}, got {type(event).__name__}")
     return event

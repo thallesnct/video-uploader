@@ -79,7 +79,13 @@ select = ["E", "F", "I", "UP", "B", "SIM", "ASYNC", "S", "RET", "C4"]
 ignore = ["S603", "S607"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101"]   # asserts are the point
+# Asserts are the point; test fixtures use obviously fake credentials.
+"tests/**" = ["S101", "S105", "S106"]
+# Local operator scripts that talk to localhost over http on purpose.
+"infra/**" = ["S310"]
+# Field *names* like secret_key trip the hardcoded-password heuristic; the
+# values come from the environment and are required (see the fail-fast tests).
+"libs/pipeline/settings.py" = ["S105"]
 
 [tool.mypy]
 python_version = "3.11"
@@ -94,5 +100,5 @@ disallow_any_generics = true
 warn_return_any = true
 
 [[tool.mypy.overrides]]
-module = ["confluent_kafka.*", "aioboto3.*", "testcontainers.*"]
+module = ["confluent_kafka.*", "aioboto3.*", "testcontainers.*", "boto3.*", "botocore.*"]
 ignore_missing_imports = true
