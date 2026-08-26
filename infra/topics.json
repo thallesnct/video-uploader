@@ -1,0 +1,74 @@
+{
+  "_comment": [
+    "The single source of truth for Kafka topics — ADR-0002's table, as data.",
+    "infra/bootstrap_topics.py creates these; libs/pipeline/topics.py (Phase 2)",
+    "will read this same file so application code and infra can never disagree.",
+    "Partition counts are a ceiling on consumer parallelism and are painful to",
+    "change later (it remaps keys to partitions), so they are over-provisioned."
+  ],
+  "profiles": {
+    "dev":  { "replication_factor": 1, "min_insync_replicas": 1 },
+    "prod": { "replication_factor": 3, "min_insync_replicas": 2 }
+  },
+  "retry_tiers": ["10s", "1m", "10m"],
+  "topics": [
+    {
+      "name": "video.uploaded",
+      "partitions": { "dev": 3, "prod": 6 },
+      "retention_ms": 604800000,
+      "produced_by": ["api"],
+      "consumed_by": ["probe"],
+      "retries": true
+    },
+    {
+      "name": "video.probed",
+      "partitions": { "dev": 3, "prod": 6 },
+      "retention_ms": 604800000,
+      "produced_by": ["probe"],
+      "consumed_by": ["thumbnail"],
+      "retries": true
+    },
+    {
+      "name": "rendition.requested",
+      "partitions": { "dev": 12, "prod": 24 },
+      "retention_ms": 604800000,
+      "produced_by": ["probe"],
+      "consumed_by": ["transcode"],
+      "retries": true,
+      "_note": "The hot path. Partition count caps transcode parallelism (ADR-0002)."
+    },
+    {
+      "name": "rendition.completed",
+      "partitions": { "dev": 6, "prod": 12 },
+      "retention_ms": 604800000,
+      "produced_by": ["transcode"],
+      "consumed_by": ["packager"],
+      "retries": true
+    },
+    {
+      "name": "video.completed",
+      "partitions": { "dev": 3, "prod": 6 },
+      "retention_ms": 2592000000,
+      "produced_by": ["packager"],
+      "consumed_by": ["notify"],
+      "retries": true
+    },
+    {
+      "name": "video.status",
+      "partitions": { "dev": 6, "prod": 12 },
+      "retention_ms": 2592000000,
+      "produced_by": ["api", "probe", "transcode", "thumbnail", "packager"],
+      "consumed_by": ["projector", "api-sse"],
+      "retries": false,
+      "_note": "Client-facing contract seam (ADR-0008). Longer retention: the projector must be able to rebuild the read model from it."
+    },
+    {
+      "name": "pipeline.failed",
+      "partitions": { "dev": 3, "prod": 6 },
+      "retention_ms": 2592000000,
+      "produced_by": ["*"],
+      "consumed_by": ["projector", "notify"],
+      "retries": false
+    }
+  ]
+}
