@@ -16,7 +16,7 @@ commit splits into two.
 |---|---|---|---|
 | 0 | Config baseline & docs | `[x]` | `ls -l CLAUDE.md` resolves to `AGENTS.md` |
 | 1 | Infra skeleton | `[~]` | `make up && make smoke` ✅ passing |
-| 2 | Shared contracts library | `[ ]` | `make unit` |
+| 2 | Shared contracts library | `[x]` | `make unit` ✅ 71 tests |
 | 3 | Upload path | `[ ]` | `make integration ARGS="-k upload"` |
 | 4 | Probe stage | `[ ]` | `make integration ARGS="-k probe"` |
 | 5 | Transcode workers | `[ ]` | `make integration ARGS="-k transcode"` |
@@ -51,14 +51,13 @@ Refs: ADR-0002, ADR-0006, ADR-0007, ADR-0014, ADR-0015
 - [x] Alembic baseline migration (empty)
 - [x] `pyproject.toml` + `uv.lock`, ruff/mypy/pre-commit config (ADR-0014)
 - [x] `.env.example` documenting every variable
-- [ ] `pydantic-settings` module per service — **deferred to Phase 2**: no service
-      exists to configure yet. `.env.example` is the contract they will read.
-- [ ] `/healthz` (no dependency checks) and `/readyz` (checks deps) on every
-      service — ADR-0015. **Deferred to Phase 2**: lands as
-      `libs/pipeline/health.py` so every service gets it by construction rather
-      than by copy-paste.
+- [x] `pydantic-settings` module — **landed in Phase 2** as one shared
+      `libs/pipeline/settings.py` rather than one module per service.
+- [x] `/healthz` (no dependency checks) and `/readyz` (checks deps) — **landed in
+      Phase 2** as `libs/pipeline/health.py`, so every service gets probes by
+      construction rather than by copy-paste.
 - [ ] Multi-stage images: non-root user, pinned ffmpeg in the worker image only —
-      **deferred to Phase 2**, for the same reason: nothing to containerise yet.
+      deferred again, now to **Phase 3**: still nothing to containerise.
 
 **Gate:** `make up && make smoke` — **PASSING**, verified from a clean slate
 (`make down` wiping volumes, then `up`, then `smoke`) on 2026-08-26:
@@ -109,21 +108,44 @@ ticked on a technicality.
   whole gate chain aborted silently. Ordering matters in a Makefile that spans
   two compose files.
 
-## Phase 2 — Shared contracts library `[ ]`
-Refs: ADR-0003, ADR-0005, ADR-0009
+## Phase 2 — Shared contracts library `[x]`
+Refs: ADR-0003, ADR-0004, ADR-0005, ADR-0009, ADR-0010, ADR-0015
 
-- [ ] `libs/pipeline/events.py` — Pydantic envelope: `event_id`, `video_id`,
+- [x] `libs/pipeline/events.py` — Pydantic envelope: `event_id`, `video_id`,
       `occurred_at`, `schema_version`, typed payload per event
-- [ ] `libs/pipeline/topics.py` — topic names, keys, partition counts in one place
-- [ ] `libs/pipeline/producer.py` — idempotent producer (`enable.idempotence=true`,
+- [x] `libs/pipeline/topics.py` — topic names, keys, partition counts in one place
+- [x] `libs/pipeline/producer.py` — idempotent producer (`enable.idempotence=true`,
       `acks=all`), OTel `traceparent` injected into headers
-- [ ] `libs/pipeline/consumer.py` — the long-poll/pause loop of ADR-0004, reusable
-- [ ] `libs/pipeline/retry.py` — retry topic + backoff + DLQ routing
-- [ ] `libs/pipeline/storage.py` — S3/MinIO client, key builders, presign helpers
-- [ ] `libs/pipeline/obs.py` — metrics registry, OTel tracer bootstrap
+- [x] `libs/pipeline/consumer.py` — the long-poll/pause loop of ADR-0004, reusable
+- [x] `libs/pipeline/retry.py` — retry topic + backoff + DLQ routing
+- [x] `libs/pipeline/storage.py` — S3/MinIO client, key builders, presign helpers
+- [x] `libs/pipeline/obs.py` — metrics registry, OTel tracer bootstrap
+- [x] `libs/pipeline/settings.py` — carried from Phase 1. One shared module rather
+      than one per service: every service reads the same variables, and a second
+      copy is how two services end up disagreeing about a default.
+- [x] `libs/pipeline/health.py` — carried from Phase 1. `/healthz`, `/readyz` and
+      `/metrics` on a side port, so a worker gets probes without a web framework.
+- [ ] Multi-stage images (non-root, ffmpeg only in the worker image) — **still
+      deferred**, now to Phase 3. There is still nothing to containerise.
 
-**Gate:** `make unit` green, including envelope round-trip and an
-unknown-field-tolerance test proving forward compatibility (ADR-0003).
+**Gate:** `make unit` — **PASSING**, 71 tests, plus `make lint` (ruff + mypy
+strict on `libs/pipeline`) clean.
+
+Includes the two the gate names explicitly: the envelope round-trips, and a
+payload carrying an unknown field still parses — the forward compatibility that
+lets a new producer deploy before its consumers (ADR-0003).
+
+### The tests worth knowing about
+
+The ADR-0004 eviction loop is unit-tested, not just described. `ConsumerProtocol`
+is narrow enough for a fake, so `make unit` proves: partitions are paused before
+the handler runs, `poll()` keeps being called *during* the handler, the
+assignment captured at pause is the one resumed, a message delivered while
+paused is stashed rather than dropped, and failures are produced and flushed
+**before** the offset is committed.
+
+`make unit` runs through `uv` — from the host when installed, otherwise in a
+container, so a machine with only Docker can still run everything.
 
 ## Phase 3 — Upload path `[ ]`
 Refs: ADR-0001, ADR-0006
@@ -307,6 +329,7 @@ passes against the deployed environment, not localhost.
 | Date | Change | Why |
 |---|---|---|
 | 2026-08-25 | Plan, tracker and ADRs 0001–0013 written | Project kickoff |
+| 2026-08-26 | Phase 2 contracts library landed; `make unit` green with 71 tests, `make lint` clean | The ADR-0004 eviction loop is now covered by unit tests rather than only by prose |
 | 2026-08-26 | Phase 1 infra landed; gate green from a clean slate. Three service-dependent checkboxes moved to Phase 2 | Nothing to configure, health-check or containerise until services exist |
 | 2026-08-26 | Frontend baseline corrected from React 18 to React 19 in PLAN.md and ADR-0014 | 18 was a stale default, not a decision; 19 is stable and unblocked by our stack |
 | 2026-08-25 | ADR-0014 (library stack) and ADR-0015 (production readiness) added; Phase 12 expanded, Phase 13 added | Target is a production-grade app, so dependency and hardening choices are decided up front |
