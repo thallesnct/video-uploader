@@ -1,6 +1,17 @@
 # Pass pytest/playwright args through:  make integration ARGS="-k transcode"
 ARGS ?=
 COMPOSE := docker compose
+
+# Tests run through uv. Use it from the host when installed (fast inner loop);
+# otherwise fall back to a container so a bare machine with only Docker still
+# works — the constraint AGENTS.md sets for this repo.
+UV := $(shell command -v uv 2>/dev/null)
+ifdef UV
+  RUN := uv run --extra dev
+else
+  RUN := docker run --rm -v "$(CURDIR)":/w -w /w -e UV_CACHE_DIR=/w/.uv-cache \
+         ghcr.io/astral-sh/uv:python3.11-bookworm-slim uv run --extra dev
+endif
 DC_OBS  := docker compose -f docker-compose.yml -f docker-compose.obs.yml
 
 .DEFAULT_GOAL := help
@@ -48,7 +59,7 @@ obs-verify: ## Dashboards provision, traces span all stages, lag panel live
 	@echo "not implemented until Phase 10" && exit 1
 
 unit: ## Fast tests, no I/O, no containers
-	@echo "not implemented until Phase 2" && exit 1
+	$(RUN) pytest tests/unit $(ARGS)
 
 integration: ## Tests against real Kafka/Postgres/MinIO via testcontainers
 	@echo "not implemented until Phase 3" && exit 1
@@ -57,7 +68,9 @@ e2e: ## Full compose + Playwright
 	@echo "not implemented until Phase 8" && exit 1
 
 lint: ## ruff + mypy + eslint
-	@echo "not implemented until Phase 2" && exit 1
+	$(RUN) ruff check .
+	$(RUN) ruff format --check .
+	$(RUN) mypy libs/pipeline
 
 security-verify: ## Image scan, non-root, read-only rootfs, egress denied
 	@echo "not implemented until Phase 12" && exit 1

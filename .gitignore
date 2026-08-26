@@ -30,3 +30,6 @@ tmp/
 
 # Local infra state
 .data/
+
+# uv cache when tests run in a container
+.uv-cache/
