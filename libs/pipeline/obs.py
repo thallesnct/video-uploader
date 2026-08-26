@@ -110,9 +110,14 @@ def setup_tracing(service_name: str | None = None) -> None:
         resource=resource,
         sampler=ParentBased(TraceIdRatioBased(settings.trace_sample_ratio)),
     )
-    provider.add_span_processor(
-        BatchSpanProcessor(OTLPSpanExporter(endpoint=settings.otlp_endpoint, insecure=True))
-    )
+    # An empty endpoint means "trace, but export nowhere". The provider is still
+    # installed, so spans have real contexts and traceparent still propagates
+    # through Kafka headers — context propagation must not depend on a collector
+    # being reachable (ADR-0010).
+    if settings.otlp_endpoint:
+        provider.add_span_processor(
+            BatchSpanProcessor(OTLPSpanExporter(endpoint=settings.otlp_endpoint, insecure=True))
+        )
     trace.set_tracer_provider(provider)
 
 

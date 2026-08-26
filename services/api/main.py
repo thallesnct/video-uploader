@@ -15,10 +15,12 @@ from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Response, status
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor  # noqa: E402
 from pipeline import storage
 from pipeline.auth import AuthError, Principal, TokenVerifier, bearer_token
 from pipeline.db import create_engine, session_scope, sessions
 from pipeline.events import VideoState, VideoStatusChanged, VideoUploaded
+from pipeline.obs import setup_tracing
 from pipeline.producer import AsyncEventProducer
 from pipeline.repository import VideoRepository
 from pipeline.settings import observability_settings, quota_settings
@@ -56,6 +58,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="video pipeline API", lifespan=lifespan)
+
+# Instrumented at import, not inside the lifespan: Starlette builds its
+# middleware stack before lifespan runs, so instrumenting there silently never
+# takes effect — the app works, and every message quietly loses its traceparent.
+#
+# The API is where a video's trace begins (ADR-0010). Without an active server
+# span there is nothing for the propagator to inject, and the trace is broken at
+# the very first hop.
+setup_tracing(SERVICE)
+FastAPIInstrumentor.instrument_app(app)
 
 
 # ------------------------------------------------------------------ dependencies
