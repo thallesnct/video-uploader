@@ -92,6 +92,11 @@ ifndef UV
 endif
 	$(RUN_HOST) pytest tests/integration $(ARGS)
 
+ffmpeg-tests: ## Run the ffmpeg-dependent tests inside the worker image
+	docker build --target test -f services/worker_probe/Dockerfile \
+	  -t vp-worker-probe:test .
+	docker run --rm vp-worker-probe:test pytest tests/ffmpeg -q -p no:cacheprovider $(ARGS)
+
 e2e: ## Full compose + Playwright
 	@echo "not implemented until Phase 8" && exit 1
 
