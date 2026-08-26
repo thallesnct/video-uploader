@@ -144,7 +144,26 @@ class VideoStatusChanged(Event):
     type: Literal["video.status"] = "video.status"
     state: VideoState
     rendition: Rendition | None = None
+    # Human/debug only — the frontend must never parse this (ADR-0007 follow-on).
     detail: str | None = None
+
+    # --- Phase 6 additions: video.status is pinned to by both the projector
+    # (ADR-0007) and the SSE gateway (ADR-0008), so it must carry everything
+    # either needs rather than requiring them to also read internal stage
+    # topics. All optional and additive — does not bump SCHEMA_VERSION. ---
+
+    # Populated by the probe worker on a video-level status change.
+    duration_s: float | None = None
+    width: int | None = None
+    height: int | None = None
+    expected_renditions: list[Rendition] | None = None
+
+    # Populated by the transcode worker; only ever set together with
+    # `rendition`, never on a video-level status change. Named for the
+    # rendition explicitly rather than a bare `object_key`/`size_bytes` so a
+    # consumer cannot confuse which row they belong to.
+    rendition_object_key: str | None = None
+    rendition_size_bytes: int | None = None
 
 
 EVENT_TYPES: dict[str, type[Event]] = {

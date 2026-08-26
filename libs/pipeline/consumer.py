@@ -224,9 +224,8 @@ class StageWorker:
         finally:
             self._consumer.resume(paused)
 
-        if error is not None:
-            if not self._route_failure(raw, error):
-                return
+        if error is not None and not self._route_failure(raw, error):
+            return
         self._commit(raw)
 
     def _heartbeat_until(self, future: Future[None]) -> None:

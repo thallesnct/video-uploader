@@ -98,6 +98,5 @@ def test_terminal_failure_on_a_non_retryable_topic_still_reaches_a_dlq() -> None
         == "video.status.dlq"
     )
     assert (
-        POLICY.route("video.status", FailureClass.POISON, 0, retryable=False)
-        == "video.status.dlq"
+        POLICY.route("video.status", FailureClass.POISON, 0, retryable=False) == "video.status.dlq"
     )

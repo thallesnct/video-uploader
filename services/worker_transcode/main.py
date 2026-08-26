@@ -154,6 +154,8 @@ def _announce(
             state=VideoState.TRANSCODING,
             rendition=event.rendition,
             detail=f"{event.rendition} ready",
+            rendition_object_key=event.target_key,
+            rendition_size_bytes=size_bytes,
         ),
     )
     producer.flush()

@@ -123,6 +123,10 @@ def build_handler(store: ObjectStore, producer: EventProducer, prober: Prober = 
                 producer=SERVICE,
                 state=VideoState.PROBED,
                 detail=f"{len(ladder)} renditions planned: {', '.join(ladder)}",
+                duration_s=info.duration_s,
+                width=width,
+                height=height,
+                expected_renditions=ladder,
             ),
         )
         # Nothing is committed until these are actually delivered.
