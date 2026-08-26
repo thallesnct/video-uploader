@@ -78,3 +78,64 @@ Rules:
   Its consumer lag gets a dedicated Grafana panel and alert (ADR-0010).
 - Rebuilding the read model is a supported operation: truncate, reset the
   projector group to earliest, replay.
+
+## Follow-on decision: `video.status` must be self-sufficient (2026-08-26)
+
+Discovered while building the projector. This ADR's decision text says the
+projector "consumes `video.status`", but the schema it upserts into
+(`videos.duration_s/width/height/expected_renditions`) only existed, before
+now, on `video.probed` — an internal stage topic `video.status` was never meant
+to expose (ADR-0002's reshape seam). A projector that read `video.probed`
+directly to fill those columns would work, but it would not fix the same gap in
+the SSE gateway (ADR-0008), which is architecturally pinned to `video.status`
+only and needs the same data for "placeholders from the probed ladder" (Phase
+8). Reading two different topic sets to answer the same question in two
+services is itself a drift risk, so the fix is made once, upstream:
+
+- **`VideoStatusChanged` gains optional fields**: `duration_s`, `width`,
+  `height`, `expected_renditions` (populated by the probe worker),
+  `rendition_object_key`, `rendition_size_bytes` (populated by the transcode
+  worker, and always paired with `rendition` being non-null — never set for a
+  video-level status change). All new fields are `| None = None`; this is
+  additive under ADR-0003 and does **not** bump `SCHEMA_VERSION`.
+- **The projector's actual input is `video.status` *and* `pipeline.failed`**,
+  both already listed as `consumed_by: ["projector", ...]` in
+  `topics.json` — the registry had already anticipated this; the ADR's prose
+  undersold it. `pipeline.failed` carries `stage`/`reason`/`terminal`/
+  `rendition` directly (ADR-0005), which is exactly what `videos.failure_reason`
+  and `renditions.failure_reason` need; duplicating those fields onto
+  `video.status` instead would be the dual-write shape this ADR exists to
+  prevent. Every `pipeline.failed` event this system currently emits has
+  `terminal=True` (`_emit_pipeline_failed` is only called on the DLQ branch —
+  ADR-0005's follow-on above), so the projector treats its arrival as
+  unconditionally terminal: set `status="failed"`, `failure_reason=reason`, and
+  — when `rendition` is set — the same on that rendition's row.
+- **`object_key` is deliberately not a bare shared field.** The projector
+  branches on `rendition is not None` to decide whether an incoming status
+  event is about the video or one of its renditions, and only
+  `rendition_object_key`/`rendition_size_bytes` are read in the
+  rendition-is-set branch — a test asserts this explicitly, so a future field
+  addition can't quietly reintroduce the ambiguity a bare `object_key` would
+  have created.
+
+### Known limitation: no monotonicity guard on `videos.status`
+
+Per-video ordering on `video.status` (keyed by `video_id`) means normal flow
+cannot regress state. A manual DLQ replay that reinjects a stale event out of
+order could move `videos.status` backwards (e.g. `completed` → `transcoding`).
+Not addressed in Phase 6: DLQ replay is a deliberate, rare, operator-initiated
+action (ADR-0005), not a normal-flow concern, and a state-ordering guard adds
+real complexity (a total order over `VideoState` including terminal states)
+for a scenario that does not occur otherwise. Tracked as a Phase 12 hardening
+item alongside the claim-window gap found in Phase 5.
+
+### Consequences
+
+- `duration_s`/`width`/`height`/`expected_renditions` now appear on two event
+  types (`VideoProbed` and `VideoStatusChanged`). This is intentional
+  duplication across an internal-vs-client-facing seam, not drift: `VideoProbed`
+  remains the internal pipeline record: nothing new consumes it.
+- Any future stage that must move a *state* column into the read model follows
+  the same pattern: add optional fields to `VideoStatusChanged`, never widen
+  what the projector or the SSE gateway consume beyond `video.status` +
+  `pipeline.failed`.

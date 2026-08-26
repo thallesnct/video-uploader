@@ -84,3 +84,47 @@ when a DLQ becomes non-empty.
 - Retry topics multiply the topic count; `make topics` generates them from the
   registry rather than by hand.
 - A redelivery test is mandatory in every stage's definition of done (AGENTS.md).
+
+## Follow-on decision: non-retryable topics need a DLQ but not a ladder (2026-08-26)
+
+Discovered while building the projector (Phase 6): `video.status` and
+`pipeline.failed` are declared `retries: false` in the topic registry, because
+their consumers (`projector`, and later the SSE gateway) only ever perform a
+cheap idempotent upsert — retrying with a timed backoff buys nothing an
+immediate redelivery doesn't. But `retries: false` also skipped creating a
+`.dlq` topic (`TopicRegistry.plan()`'s `if not spec.retries: continue` covered
+both the ladder and the DLQ), and auto-topic-creation is off everywhere
+(ADR-0002). The first time a projector handler raised — a transient DB
+connection error is not a hypothetical, it is expected under the load testing
+this system is built for — `RetryPolicy.route()` would have returned
+`video.status.retry.10s`, and the produce would fail outright against a broker
+that was never asked to create it.
+
+Two changes:
+
+- **DLQ topics are now created unconditionally**, independent of the `retries`
+  flag. A poison or terminal message needs somewhere to land regardless of
+  whether its topic has a timed retry ladder — the ladder and the DLQ are
+  separate concerns that happened to share one boolean.
+- **`RetryPolicy.route()` takes a `retryable` flag.** For a `TRANSIENT` failure
+  on a non-retryable topic it returns `None`: no retry topic, no DLQ, nothing
+  produced. `StageWorker` reads this as "leave the offset uncommitted" — the
+  message is redelivered on the next poll, which is nearly free for an
+  idempotent upsert and does not compound the way a blind commit-and-drop
+  would. `TERMINAL`/`POISON` failures are unaffected: they still route straight
+  to the (now always-present) DLQ, because an unparseable message left
+  uncommitted forever would livelock the partition behind it.
+
+`infra/bootstrap_topics.py` reimplements `TopicRegistry.plan()`'s derivation by
+hand (it is a stdlib-only script that runs before the venv exists) and was
+updated in lockstep — the exact drift this ADR's registry-as-data approach
+exists to prevent.
+
+### Consequences
+
+- A stage with `retries: false` must be safe to redeliver indefinitely on
+  transient failure — true today only for upsert-shaped consumers (projector).
+  A future non-retryable topic with a non-idempotent consumer would need its
+  own review before relying on this behavior.
+- No change for any existing `retries: true` topic or stage; every current
+  worker's retry/DLQ behavior is unchanged, verified by the existing test suite.
