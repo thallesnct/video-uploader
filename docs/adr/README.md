@@ -25,6 +25,7 @@ are what stops the same debate from being reopened every quarter.
 | [0013](0013-completion-aggregation-for-packaging.md) | Completion aggregation for packaging | Accepted | The fan-in join, and the race two finishers create |
 | [0014](0014-python-and-frontend-library-stack.md) | Library stack | Accepted | Dependency choices are the hardest to reverse |
 | [0015](0015-production-readiness.md) | Production readiness | Accepted | ffmpeg parses hostile input; probes and shutdown can't be bolted on |
+| [0016](0016-per-user-isolation-and-identity.md) | Per-user isolation and identity | Accepted | owner_id must be in the keys and schema from migration one, not retrofitted |
 
 ## Writing a new one
 
