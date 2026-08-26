@@ -113,6 +113,10 @@ class ObjectStore:
     def bucket(self) -> str:
         return self._settings.bucket
 
+    @property
+    def presign_put_expiry_s(self) -> int:
+        return self._settings.presign_put_expiry_s
+
     def presign_put(self, key: str, content_type: str, max_bytes: int | None = None) -> str:
         """URL the browser PUTs to directly — the API never sees the bytes.
 
