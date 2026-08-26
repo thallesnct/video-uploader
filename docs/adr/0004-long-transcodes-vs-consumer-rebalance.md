@@ -46,7 +46,13 @@ while running:
 Supporting settings:
 
 - `enable.auto.commit=false` — commit only after the output is durably written.
-- `max.poll.records=1` — never hold a batch hostage to one slow item.
+- `max.poll.records=1` — never hold a batch hostage to one slow item. (Belt and
+  braces with librdkafka, whose `poll()` returns a single message by design;
+  verified as an accepted property on librdkafka 2.15.0, where an unknown
+  property is rejected at construction.)
+- `enable.auto.offset.store=false` alongside `enable.auto.commit=false`, or
+  librdkafka stores offsets as messages are delivered and the manual commit
+  commits work that has not happened yet.
 - `max.poll.interval.ms=600000` (10 min) as defence in depth, **not** as the
   primary mechanism.
 - A hard ffmpeg timeout per rendition, scaled to source duration; exceeding it is
