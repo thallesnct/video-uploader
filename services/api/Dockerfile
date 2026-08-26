@@ -12,6 +12,8 @@ RUN uv sync --frozen --no-dev --no-install-project
 
 COPY libs ./libs
 COPY services ./services
+COPY migrations ./migrations
+COPY alembic.ini ./
 RUN uv sync --frozen --no-dev
 
 FROM python:3.11-slim AS runtime
