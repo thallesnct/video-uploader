@@ -23,6 +23,7 @@ POLICY = RetryPolicy(("10s", "1m", "10m"))
 def a_message(**overrides: object) -> FakeMessage:
     event = events.RenditionRequested(
         video_id=uuid4(),
+        owner_id="user|test",
         producer="probe",
         rendition="720p",
         source_key="videos/x/source.mp4",
@@ -260,6 +261,7 @@ def test_both_producers_build_identical_headers() -> None:
 
     event = events.VideoUploaded(
         video_id=uuid4(),
+        owner_id="user|test",
         producer="api",
         object_key="k",
         filename="f.mp4",
@@ -277,7 +279,7 @@ async def test_async_producer_refuses_to_publish_before_start() -> None:
 
     producer = AsyncEventProducer()
     event = events.VideoStatusChanged(
-        video_id=uuid4(), producer="api", state=events.VideoState.UPLOADED
+        video_id=uuid4(), owner_id="user|test", producer="api", state=events.VideoState.UPLOADED
     )
     with pytest.raises(RuntimeError, match="start"):
         await producer.publish("video.status", event)

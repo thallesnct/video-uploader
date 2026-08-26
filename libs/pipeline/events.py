@@ -56,6 +56,10 @@ class Event(BaseModel):
     event_id: UUID = Field(default_factory=uuid4)
     # Also the partition key: all events for one video keep their order (ADR-0002).
     video_id: UUID
+    # Carried on every message so a worker can build owner-scoped object keys and
+    # authorize without a database round trip (ADR-0016 §6). Tenancy lives in the
+    # data, never in the topology.
+    owner_id: str
     occurred_at: datetime = Field(default_factory=_now)
     schema_version: int = SCHEMA_VERSION
     producer: str

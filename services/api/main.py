@@ -222,6 +222,7 @@ async def complete_upload(video_id: uuid.UUID, caller: Caller) -> VideoResponse:
     if claimed:
         uploaded = VideoUploaded(
             video_id=video_id,
+            owner_id=caller.owner_id,
             producer=SERVICE,
             object_key=refreshed.object_key,
             filename=refreshed.filename,

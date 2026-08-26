@@ -13,6 +13,7 @@ from pipeline import events
 def test_round_trip_preserves_every_field() -> None:
     original = events.RenditionCompleted(
         video_id=uuid4(),
+        owner_id="user|test",
         producer="worker-transcode",
         rendition="720p",
         object_key="videos/x/renditions/720p.mp4",
@@ -31,6 +32,7 @@ def test_consumer_ignores_fields_it_does_not_know() -> None:
     payload = json.loads(
         events.VideoUploaded(
             video_id=uuid4(),
+            owner_id="user|test",
             producer="api",
             object_key="videos/x/source.mp4",
             filename="holiday.mp4",
@@ -54,6 +56,7 @@ def test_unknown_type_is_poison_not_a_retry() -> None:
 def test_parse_as_rejects_the_wrong_event_on_a_topic() -> None:
     raw = events.VideoUploaded(
         video_id=uuid4(),
+        owner_id="user|test",
         producer="api",
         object_key="k",
         filename="f.mp4",
@@ -68,7 +71,7 @@ def test_parse_as_rejects_the_wrong_event_on_a_topic() -> None:
 def test_key_is_video_id_so_ordering_holds() -> None:
     video_id = uuid4()
     event = events.VideoStatusChanged(
-        video_id=video_id, producer="api", state=events.VideoState.UPLOADED
+        video_id=video_id, owner_id="user|test", producer="api", state=events.VideoState.UPLOADED
     )
     assert event.key == str(video_id).encode()
 
@@ -80,7 +83,7 @@ def test_every_registered_type_matches_its_class_literal() -> None:
 
 def test_defaults_are_populated() -> None:
     event = events.VideoStatusChanged(
-        video_id=uuid4(), producer="api", state=events.VideoState.PROBED
+        video_id=uuid4(), owner_id="user|test", producer="api", state=events.VideoState.PROBED
     )
     assert event.schema_version == events.SCHEMA_VERSION
     assert event.occurred_at.tzinfo is not None
@@ -92,6 +95,7 @@ def test_rendition_shape_is_validated(bad: str) -> None:
     with pytest.raises(ValueError, match="rendition"):
         events.RenditionRequested(
             video_id=uuid4(),
+            owner_id="user|test",
             producer="probe",
             rendition=bad,
             source_key="s",
@@ -101,7 +105,7 @@ def test_rendition_shape_is_validated(bad: str) -> None:
 
 def test_events_are_immutable() -> None:
     event = events.VideoStatusChanged(
-        video_id=uuid4(), producer="api", state=events.VideoState.UPLOADED
+        video_id=uuid4(), owner_id="user|test", producer="api", state=events.VideoState.UPLOADED
     )
     with pytest.raises(ValueError, match="frozen"):
         event.state = events.VideoState.FAILED  # type: ignore[misc]
