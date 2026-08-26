@@ -236,7 +236,14 @@ silently reinterpreting the gate as "injected metadata", it is now two checks:
    wording is actually verified: a real 640×360 file yields `["360p"]` and no
    1080p.
 
-Plus `make unit` (106) and `make lint` clean.
+Plus `make unit` (106) and `make lint` clean, and the **full** integration suite
+green together: 26 tests (20 upload + 6 probe) in one session.
+
+Running them together mattered. It caught a regression from the `owner_id`
+envelope change that the phase gates alone missed: `/complete` published
+`video.uploaded` and then raised a `ValidationError` on `video.status`, leaving
+the claim taken and no status event emitted. In production that is every upload
+failing halfway through.
 
 ### The assertion this phase exists for
 
