@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+web/dist/
+.vite/
+
+# Local env & secrets — never commit real values; .env.example is the template
+.env
+.env.local
+*.pem
+*.key
+
+# Test media & scratch output
+tmp/
+*.mp4
+*.ts
+*.m3u8
+!tests/fixtures/**
+
+# Local infra state
+.data/
