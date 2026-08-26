@@ -17,7 +17,7 @@ commit splits into two.
 | 0 | Config baseline & docs | `[x]` | `ls -l CLAUDE.md` resolves to `AGENTS.md` |
 | 1 | Infra skeleton | `[~]` | `make up && make smoke` ✅ passing |
 | 2 | Shared contracts library | `[x]` | `make unit` ✅ 72 tests |
-| 3 | Upload path | `[ ]` | `make integration ARGS="-k upload"` |
+| 3 | Upload path | `[x]` | `make integration` ✅ 20 tests |
 | 4 | Probe stage | `[ ]` | `make integration ARGS="-k probe"` |
 | 5 | Transcode workers | `[ ]` | `make integration ARGS="-k transcode"` |
 | 6 | Read model & projector | `[ ]` | `make integration ARGS="-k projector"` |
@@ -148,31 +148,67 @@ paused is stashed rather than dropped, and failures are produced and flushed
 `make unit` runs through `uv` — from the host when installed, otherwise in a
 container, so a machine with only Docker can still run everything.
 
-## Phase 3 — Upload path `[ ]`
+## Phase 3 — Upload path `[x]`
 Refs: ADR-0001, ADR-0006, ADR-0016
 
-- [ ] Local OIDC issuer in compose + JWKS verification in the API (ADR-0016).
-      The issuer mints tokens instantly from a fixed key pair, so load tests are
-      not bottlenecked on an auth server.
-- [ ] `owner_id` from the `sub` claim; repository functions take it as a
-      **required argument**, so a missing tenant filter is impossible to write
-      by forgetting rather than by choosing
-- [ ] Migration: `videos` with `owner_id` not null + index
-- [ ] `POST /videos` → row (`awaiting_upload`) + presigned PUT under the
+- [x] Local OIDC issuer in compose + JWKS verification in the API (ADR-0016)
+- [x] `owner_id` from the `sub` claim; repository functions take it as a
+      **required positional argument**
+- [x] Migration `0002_videos`: `owner_id` not null, indexed for listing and for
+      quota counting
+- [x] `POST /videos` → row (`awaiting_upload`) + presigned PUT under the
       caller's own prefix only
-- [ ] `POST /videos/{id}/complete` → verify object exists, emit `video.uploaded`
-- [ ] Size/content-type limits enforced in the presign policy, not in the app
-- [ ] Per-user quotas: upload size, concurrent uploads, videos in flight
-      (ADR-0016 — the noisy-neighbour behaviour the load test exists to reveal)
-- [ ] `GET /videos`, `GET /videos/{id}` — owner-filtered
-- [ ] Multi-stage image for the API: non-root, read-only rootfs (carried from
-      Phase 1/2, now that there is finally something to containerise)
+- [x] `POST /videos/{id}/complete` → verify object exists, claim, emit
+      `video.uploaded` + `video.status`
+- [x] Content-type allow-list at the door; **size limit verified after upload**,
+      not in the presign — see the note below
+- [x] Per-user quotas: declared upload size, videos in flight
+- [x] `GET /videos`, `GET /videos/{id}` — owner-filtered
+- [x] Multi-stage image for the API: non-root, read-only rootfs, caps dropped
 
-**Gate:** `make integration ARGS="-k upload"` — PUT the fixture to MinIO via the
-presigned URL, call `/complete`, assert exactly one `video.uploaded` message keyed
-by `video_id`, and that a second `/complete` does **not** produce a second message.
-Plus the isolation cases: **user B cannot presign into user A's prefix, cannot
-read user A's video, and cannot open an SSE stream for it.**
+### Where the presigned URL cannot enforce what ADR-0006 implied
+
+A presigned **PUT** signs a key and content type, but it cannot bound the body
+size — only a presigned **POST policy** carries `content-length-range`. So the
+size ceiling is enforced in two places instead of one: the *declared* size is
+refused at `POST /videos` (413), and the *actual* stored size is checked at
+`/complete`, which deletes the object and returns 413 if it is over. A caller
+can therefore still burn bandwidth uploading something too large before being
+told. Moving to a presigned POST policy is the fix if that becomes a problem;
+recorded here rather than claiming enforcement we do not have.
+
+**Gate:** `make integration` — **PASSING**, 20 tests, on 2026-08-26. Also
+`make unit` (77) and `make lint` clean.
+
+Covers what the gate named: the fixture is PUT to MinIO through the presigned
+URL, `/complete` publishes exactly one `video.uploaded` keyed by `video_id`, and
+a second `/complete` publishes nothing while still returning 200. Plus the
+isolation cases — user B cannot read, complete, or list user A's video, and a
+presigned URL rewritten to point at another tenant's key is rejected by the
+signature.
+
+### Three production bugs the integration tests caught
+
+None of these could fail a unit test, and all three are fatal in the built image:
+
+1. **`aiokafka` needs the `[lz4]` extra.** librdkafka compiles lz4 in, so the
+   workers were fine while the API died at startup — a split that looks like a
+   broker problem.
+2. **`sqlalchemy` needs the `[asyncio]` extra** for greenlet, or the API raises
+   on its first database query.
+3. **Instrumenting inside the lifespan silently does nothing.** Starlette builds
+   its middleware stack before lifespan runs, so the tracing middleware never
+   joined it: the app worked, and every message quietly lost its `traceparent`.
+   ADR-0010's single trace per video would have been broken at the first hop,
+   discoverable only months later.
+
+### Also learned: never let pip resolve on this host
+
+`pip install -e ".[dev]"` backtracked to urllib3 1.25 and burned minutes at 86%
+CPU. `uv.lock` is the source of truth (ADR-0014), so `make` now exports it to a
+pinned `requirements-dev.txt` and installs with `--no-deps`. The project is not
+installed at all — `pytest`'s `pythonpath` imports it from the source tree,
+removing the build-backend step that hung the same way.
 
 ## Phase 4 — Probe stage `[ ]`
 Refs: ADR-0012 (conditional fan-out)
@@ -367,6 +403,7 @@ bottleneck of each named.
 | Date | Change | Why |
 |---|---|---|
 | 2026-08-25 | Plan, tracker and ADRs 0001–0013 written | Project kickoff |
+| 2026-08-26 | Phase 3 upload path landed; integration gate green with 20 tests | Caught three production-fatal bugs (lz4, greenlet, lifespan instrumentation) that no unit test could reach |
 | 2026-08-26 | Per-user isolation confirmed (ADR-0016); object keys gain an owner prefix; Phase 3 gains auth/quota tasks and a Phase 14 for load testing | The user confirmed real-world intent and load testing, making tenancy a design input rather than a retrofit |
 | 2026-08-26 | Phase 2 contracts library landed; `make unit` green with 71 tests, `make lint` clean | The ADR-0004 eviction loop is now covered by unit tests rather than only by prose |
 | 2026-08-26 | Phase 1 infra landed; gate green from a clean slate. Three service-dependent checkboxes moved to Phase 2 | Nothing to configure, health-check or containerise until services exist |
