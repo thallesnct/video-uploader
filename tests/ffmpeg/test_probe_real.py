@@ -4,13 +4,13 @@ Everything else about the probe stage is covered without ffmpeg by injecting the
 prober. This file covers the one thing that cannot be: that our argv, our
 parsing and the actual binary agree on a real file.
 """
+
 from __future__ import annotations
 
 import pathlib
 import subprocess
 
 import pytest
-
 from pipeline.ladder import select_ladder
 from pipeline.media import probe
 from pipeline.retry import TerminalError
@@ -30,14 +30,31 @@ def clip(tmp_path_factory: pytest.TempPathFactory) -> pathlib.Path:
     generated = tmp_path_factory.mktemp("fixtures") / "testsrc-640x360.mp4"
     subprocess.run(  # noqa: S603
         [
-            "ffmpeg", "-hide_banner", "-loglevel", "error",
-            "-f", "lavfi", "-i", "testsrc=size=640x360:rate=15",
-            "-f", "lavfi", "-i", "sine=frequency=440",
-            "-t", "2", "-pix_fmt", "yuv420p",
-            "-c:v", "libx264", "-c:a", "aac", "-shortest",
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=640x360:rate=15",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440",
+            "-t",
+            "2",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:v",
+            "libx264",
+            "-c:a",
+            "aac",
+            "-shortest",
             str(generated),
         ],
-        check=True, capture_output=True,
+        check=True,
+        capture_output=True,
     )
     return generated
 

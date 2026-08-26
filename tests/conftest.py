@@ -3,6 +3,7 @@
 ffmpeg lives only in the worker image (ADR-0011), so tests that shell out to it
 skip with a clear reason on a bare machine instead of failing confusingly.
 """
+
 from __future__ import annotations
 
 import shutil
