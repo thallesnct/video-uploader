@@ -19,7 +19,7 @@ commit splits into two.
 | 2 | Shared contracts library | `[x]` | `make unit` ✅ 72 tests |
 | 3 | Upload path | `[x]` | `make integration` ✅ 20 tests |
 | 4 | Probe stage | `[x]` | `make integration ARGS="-k probe"` ✅ 6 + `make ffmpeg-tests` ✅ 4 |
-| 5 | Transcode workers | `[ ]` | `make integration ARGS="-k transcode"` |
+| 5 | Transcode workers | `[x]` | `make integration ARGS="-k transcode"` ✅ 5 + full suite ✅ 30 |
 | 6 | Read model & projector | `[ ]` | `make integration ARGS="-k projector"` |
 | 7 | SSE gateway | `[ ]` | `make integration ARGS="-k sse"` |
 | 8 | Frontend | `[ ]` | `make e2e ARGS="-k upload_flow"` |
@@ -255,26 +255,74 @@ video sits in `transcoding` with nothing to alert on. The handler computes the
 ladder once and derives both from that single list, which is what makes the
 assertion hold by construction rather than by care.
 
-## Phase 5 — Transcode workers `[ ]`
-Refs: ADR-0004, ADR-0005 — **the highest-risk phase**
+## Phase 5 — Transcode workers `[x]`
+Refs: ADR-0004, ADR-0005, ADR-0006, ADR-0007, ADR-0009 — **the highest-risk phase**
 
-- [ ] ffmpeg invocation per rendition, streamed to a temp file then uploaded
-- [ ] `max.poll.records=1`, work on a thread, `pause()`/`poll()` heartbeat,
-      `resume()` + manual commit on success
-- [ ] Idempotency: skip if the output object already exists **and** the
-      `(video_id, rendition)` row is `completed`
-- [ ] Failure classification: retryable (transient S3/network) vs terminal
+- [x] ffmpeg invocation per rendition, streamed to a temp file then uploaded
+- [x] `pause()`/`poll()` heartbeat, `resume()` + manual commit on success —
+      `StageWorker`, exercised for the first time against a real long-running
+      process rather than a synthetic sleep in a unit test
+- [x] Idempotency: skip (re-announce, don't re-encode) if the output object
+      already exists; a DB claim additionally guards against genuine
+      *concurrent* double-processing (a manual DLQ replay racing a live retry)
+- [x] Failure classification: retryable (transient S3/network) vs terminal
       (corrupt input) → retry topic vs DLQ
-- [ ] Size-check before `storage.promote()`: single-part `copy_object` caps at
-      5 GB on real S3 but not on MinIO, so large renditions pass every local
-      test and fail in production (ADR-0006). Use multipart copy above the cap.
-- [ ] Emit `rendition.completed` + `video.status`; emit `pipeline.failed` on DLQ
+- [x] `storage.promote()` uses boto3's transfer-managed `copy()`, not the
+      low-level `copy_object` — chosen over hand-rolled multipart after
+      verifying the method and its behavior exist (ADR-0006)
+- [x] Emit `rendition.completed` + `video.status`; emit `pipeline.failed` on
+      DLQ (landed in `StageWorker` itself, so every future stage gets it free)
+- [x] `renditions` table + `RenditionRepository` — the column-ownership rule
+      from ADR-0007 made concrete: the worker's one write path touches only
+      `attempt`/`claimed_at`, never `status`/`object_key`
+- [x] Multi-stage image with ffmpeg, sharing one `ffmpeg-base` stage between
+      the shipped image and the test image (mirrors `worker_probe`)
 
-**Gate:** `make integration ARGS="-k transcode"`, covering:
-1. a transcode longer than `max.poll.interval.ms` completes **without** a
-   rebalance (assert no duplicate output, no repeated consumption);
-2. a deliberately redelivered message produces one object and one DB row;
-3. a corrupt input lands in the DLQ with the failure reason in its headers.
+**Gate:** `make integration ARGS="-k transcode"` — **PASSING**, 5 tests. Plus
+`make ffmpeg-tests` (9 — both probe's and transcode's), `make unit` (123), and
+the **full combined integration suite** (upload + probe + transcode, 30 tests,
+one session — no cross-test interference this time).
+
+1. ✅ a transcode longer than `max.poll.interval.ms` completes without eviction.
+   The literal gate wording ("no duplicate output, no repeated consumption")
+   turned out to be too weak to trust — see below.
+2. ✅ a redelivered message produces one object and one DB row (`attempt == 1`,
+   confirming the second delivery never touched the claim).
+3. ✅ a corrupt input lands in the DLQ with `failure_reason` in its headers,
+   **and** a `pipeline.failed` event is published — a gate case the original
+   wording didn't ask for but Phase 5's own checklist did.
+
+### Why "no duplicate output" was rewritten before it was trusted
+
+A broken implementation (no heartbeat during the handler) still ends up with
+exactly **one** file on disk: eviction causes redelivery, but the *second*
+invocation's own object-existence idempotency check would see the first
+invocation's output already sitting at the target key and skip re-encoding.
+"No duplicate output" is therefore satisfied by both the correct and the broken
+implementation — it does not discriminate.
+
+The assertion that actually catches the bug: **the injected transcode function
+was invoked exactly once**, plus a follow-up `consumer.poll()` on the same
+consumer proving nothing is left to redeliver. Verified against a real KRaft
+broker with `max.poll.interval.ms` and `session.timeout.ms` both reduced to 6s
+(confirmed empirically first that librdkafka requires the former ≥ the latter)
+and a handler that sleeps 8s — longer than the poll interval, so a broken
+implementation would provably be evicted mid-handler.
+
+### Two more places a scripted edit silently missed, caught before they shipped
+
+- `duration_s` added to `RenditionRequested` (needed for the realtime-ratio
+  metric) — the probe worker's fan-out call is where a naive text match would
+  miss it again after `ruff format` reflows a multi-line call. Verified this
+  time against pydantic's own required-field list rather than a regex, since
+  the sweep script used for the `owner_id` addition had a truncation bug on
+  long multi-line calls (silently produced both false positives and, had the
+  file been different, could have missed a true one).
+- The `insert(...).on_conflict_do_update(...)` claim statement was drafted with
+  an extra `OR status == 'completed'` branch in its WHERE guard that would have
+  let a *completed* rendition be re-claimed — backwards from the claim's actual
+  purpose (mutual exclusion, not a completion check). Caught on review before
+  it was ever run, not by a test.
 
 ## Phase 6 — Read model & projector `[ ]`
 Refs: ADR-0007
@@ -435,6 +483,7 @@ bottleneck of each named.
 | Date | Change | Why |
 |---|---|---|
 | 2026-08-25 | Plan, tracker and ADRs 0001–0013 written | Project kickoff |
+| 2026-08-26 | Phase 5 transcode workers landed; the rebalance test survives a real KRaft broker with a reduced poll interval | "No duplicate output" proved to be a non-discriminating assertion — rewritten to handler-invocation-count before being trusted |
 | 2026-08-26 | Phase 4 probe stage landed; ladder is data-dependent and the plan/fan-out invariant is asserted | Gate split into an ffmpeg-free integration check and an in-image ffprobe check, rather than reinterpreting the original wording |
 | 2026-08-26 | Phase 3 upload path landed; integration gate green with 20 tests | Caught three production-fatal bugs (lz4, greenlet, lifespan instrumentation) that no unit test could reach |
 | 2026-08-26 | Per-user isolation confirmed (ADR-0016); object keys gain an owner prefix; Phase 3 gains auth/quota tasks and a Phase 14 for load testing | The user confirmed real-world intent and load testing, making tenancy a design input rather than a retrofit |
