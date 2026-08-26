@@ -81,6 +81,46 @@ class ObservabilitySettings(BaseSettings):
     )
 
 
+class AuthSettings(BaseSettings):
+    """OIDC verification (ADR-0016).
+
+    The application only ever verifies a signature against a JWKS URL, so the
+    issuer is swappable: a minimal local one in dev, CI and load tests, a real
+    provider in production, with no code difference.
+    """
+
+    model_config = SettingsConfigDict(**_CONFIG, env_prefix="OIDC_")
+
+    issuer: str = "http://localhost:8080"
+    audience: str = "video-pipeline"
+    jwks_url: str = "http://localhost:8080/jwks.json"
+    # Refuse tokens older than this even if their exp is generous.
+    max_token_age_s: int = 24 * 3600
+
+
+class QuotaSettings(BaseSettings):
+    """Per-tenant limits (ADR-0016).
+
+    These exist so one tenant cannot fill the transcode partitions and starve
+    everyone else — the noisy-neighbour behaviour Phase 14 sets out to measure.
+    """
+
+    model_config = SettingsConfigDict(**_CONFIG, env_prefix="QUOTA_")
+
+    max_upload_bytes: int = 5 * 1024 * 1024 * 1024
+    max_videos_in_flight: int = 10
+
+
+@lru_cache(maxsize=1)
+def auth_settings() -> AuthSettings:
+    return AuthSettings()
+
+
+@lru_cache(maxsize=1)
+def quota_settings() -> QuotaSettings:
+    return QuotaSettings()
+
+
 @lru_cache(maxsize=1)
 def kafka_settings() -> KafkaSettings:
     return KafkaSettings()
