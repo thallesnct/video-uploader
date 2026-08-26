@@ -98,6 +98,9 @@ class RenditionRequested(Event):
     rendition: Rendition
     source_key: str
     target_key: str
+    # Additive under ADR-0003. Without it the transcode worker cannot compute
+    # transcode_realtime_ratio (obs.py) without re-probing or a DB round trip.
+    duration_s: float
 
 
 class RenditionCompleted(Event):

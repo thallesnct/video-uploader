@@ -100,6 +100,7 @@ def test_rendition_shape_is_validated(bad: str) -> None:
             rendition=bad,
             source_key="s",
             target_key="t",
+            duration_s=10.0,
         )
 
 

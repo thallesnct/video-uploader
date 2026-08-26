@@ -109,6 +109,7 @@ def build_handler(store: ObjectStore, producer: EventProducer, prober: Prober = 
                     rendition=rendition,
                     source_key=event.object_key,
                     target_key=rendition_key(event.owner_id, event.video_id, rendition),
+                    duration_s=info.duration_s,
                 ),
             )
 

@@ -28,6 +28,7 @@ def a_message(**overrides: object) -> FakeMessage:
         rendition="720p",
         source_key="videos/x/source.mp4",
         target_key="videos/x/renditions/720p.mp4",
+        duration_s=42.0,
     )
     return FakeMessage(value=event.serialize(), **overrides)  # type: ignore[arg-type]
 
@@ -135,6 +136,54 @@ def test_terminal_failure_skips_the_ladder_and_dead_letters() -> None:
 
     assert producer.published[0][0] == "rendition.requested.dlq"
     assert producer.header("failure_class") == "terminal"
+
+
+def test_dlq_emits_pipeline_failed_with_video_and_owner_context() -> None:
+    """Phase 5's own checklist: 'emit pipeline.failed on DLQ'. Consumed by the
+    projector for the read model's failure_reason and by notify (Phase 11)."""
+    consumer = FakeConsumer([a_message()])
+    producer = FakeProducer()
+
+    def handler(event: events.Event, view: object) -> None:
+        raise TerminalError("unsupported codec")
+
+    build(consumer, handler, producer).run(max_messages=1)
+
+    assert len(producer.typed_published) == 1
+    topic, event = producer.typed_published[0]
+    assert topic == "pipeline.failed"
+    assert isinstance(event, events.PipelineFailed)
+    assert event.terminal is True
+    assert event.rendition == "720p"
+    assert event.owner_id == "user|test"
+
+
+def test_a_retried_not_yet_dlqd_failure_does_not_emit_pipeline_failed() -> None:
+    """A message still walking the retry ladder is not a user-facing failure —
+    emitting here would flash 'failed' in the UI for something that will
+    probably still succeed."""
+    consumer = FakeConsumer([a_message()])
+    producer = FakeProducer()
+
+    def handler(event: events.Event, view: object) -> None:
+        raise TransientError("s3 timed out")
+
+    build(consumer, handler, producer).run(max_messages=1)
+
+    assert producer.typed_published == []
+
+
+def test_pipeline_failed_emission_never_crashes_on_poison_messages() -> None:
+    """An unparseable message cannot carry a video_id/owner_id, so there is
+    nothing to attach to a status event — this must degrade, not raise."""
+    consumer = FakeConsumer([FakeMessage(value=b'{"type":"video.teleported"}')])
+    producer = FakeProducer()
+
+    handled = build(consumer, lambda event, view: None, producer).run(max_messages=1)
+
+    assert handled == 1
+    assert producer.typed_published == []
+    assert producer.published[0][0] == "rendition.requested.dlq"
 
 
 def test_retry_ladder_does_not_compound_topic_names() -> None:
