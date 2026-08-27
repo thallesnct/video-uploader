@@ -13,6 +13,7 @@ function-scoped async loops is the classic way to lose an afternoon here.
 from __future__ import annotations
 
 import os
+import pathlib
 import subprocess
 import sys
 import time
@@ -20,6 +21,10 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
+
+# backend/ — the alembic subprocess below needs this regardless of the test
+# runner's own cwd or how `pipeline` got onto *this* process's sys.path.
+BACKEND_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 def _free_of_caches() -> None:
@@ -162,11 +167,20 @@ def _migrate(url: str) -> None:
 
     Invoked through the running interpreter rather than a bare `alembic`: the
     venv's bin/ is not on PATH for subprocesses, so the plain name is not found.
+
+    cwd and PYTHONPATH are set explicitly rather than inherited: this process's
+    own `pipeline` import can come from an installed package (uv sync) or from
+    pytest's `pythonpath` ini setting alone — the latter never reaches a
+    subprocess, so migrations/env.py's `from pipeline.models import Base`
+    would raise ModuleNotFoundError under the plain-venv test runner even
+    though the parent pytest process resolves the same import fine.
     """
+    env = {**os.environ, "DATABASE_URL": url, "PYTHONPATH": str(BACKEND_ROOT / "libs")}
     result = subprocess.run(  # noqa: S603
         [sys.executable, "-m", "alembic", "upgrade", "head"],
         check=False,
-        env={**os.environ, "DATABASE_URL": url},
+        cwd=BACKEND_ROOT,
+        env=env,
         capture_output=True,
         text=True,
     )
