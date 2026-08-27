@@ -138,6 +138,7 @@ class StageWorker:
         # Messages that arrived while partitions were paused (possible after a
         # rebalance assigns a new partition mid-handler). Never dropped.
         self._pending: list[Any] = []
+        self._subscribed_topics: list[str] = [source_topic]
 
     def subscribe(self, topics: list[str] | None = None) -> None:
         """Subscribe, wiring the revocation callback.
@@ -146,8 +147,9 @@ class StageWorker:
         consumer joining — so handlers need a way to notice that the partition
         they are working for is gone.
         """
+        self._subscribed_topics = topics or [self.source_topic]
         self._consumer.subscribe(
-            topics or [self.source_topic],
+            self._subscribed_topics,
             on_revoke=self._on_revoke,
             # on_lost fires when partitions are taken involuntarily — the group
             # decided we were gone. That is the ADR-0004 eviction case itself, so
@@ -322,7 +324,25 @@ class StageWorker:
         notify (Phase 11). Best-effort: the parse can fail if the payload itself
         was poison, and this must never crash the polling loop over a message
         that is already safely on the DLQ.
+
+        Skipped when this worker itself consumes PIPELINE_FAILED (ADR-0005
+        follow-on): the projector subscribes to both video.status and
+        pipeline.failed, so a deterministic failure (e.g. a video_id with no
+        row in `videos`) dead-lettering a pipeline.failed message would emit
+        a fresh pipeline.failed, which this same worker then fails to process
+        identically — an unbounded self-amplifying loop with no stopping
+        condition. Dead-lettering silently is safe here: pipeline.failed is
+        already the end of the failure-notification chain, nothing downstream
+        depends on it re-emitting itself.
         """
+        if PIPELINE_FAILED in self._subscribed_topics:
+            log.warning(
+                "not re-emitting pipeline.failed for a dead-lettered message on "
+                "%s: this worker consumes pipeline.failed itself and re-emitting "
+                "would loop",
+                view.topic,
+            )
+            return
         try:
             event = parse(view.value)
         except Exception:

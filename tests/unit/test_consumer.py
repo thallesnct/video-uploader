@@ -186,6 +186,38 @@ def test_pipeline_failed_emission_never_crashes_on_poison_messages() -> None:
     assert producer.published[0][0] == "rendition.requested.dlq"
 
 
+def test_a_worker_that_consumes_pipeline_failed_does_not_re_emit_on_its_own_failure() -> None:
+    """ADR-0005 follow-on: the projector subscribes to both video.status and
+    pipeline.failed. If it dead-letters a pipeline.failed message and emits a
+    fresh one, it will consume that too and fail identically — an unbounded
+    self-amplifying loop with no stopping condition. It must dead-letter
+    silently instead."""
+    failure = events.PipelineFailed(
+        video_id=uuid4(),
+        owner_id="user|test",
+        producer="probe",
+        stage="probe",
+        reason="original failure",
+        retry_count=3,
+        terminal=True,
+    )
+    consumer = FakeConsumer([FakeMessage(value=failure.serialize(), topic="pipeline.failed")])
+    producer = FakeProducer()
+
+    def handler(event: events.Event, view: object) -> None:
+        raise TerminalError("video_id has no row in videos")
+
+    worker = build(consumer, handler, producer)
+    worker.subscribe(topics=["video.status", "pipeline.failed"])
+    worker.run(max_messages=1)
+
+    assert producer.published[0][0] == "pipeline.failed.dlq"
+    assert producer.typed_published == [], (
+        "re-emitting pipeline.failed here would loop forever: the same worker "
+        "consumes that topic and would fail on it identically"
+    )
+
+
 def test_retry_ladder_does_not_compound_topic_names() -> None:
     """Consuming from x.retry.10s must route to x.retry.1m, not x.retry.10s.retry.1m."""
     consumer = FakeConsumer(
