@@ -27,5 +27,8 @@ export default defineConfig({
   // upload must work identically under `npm run dev` and the `build`+
   // `preview` pair `make e2e` runs against.
   server: { port: 5173, strictPort: true, proxy },
-  preview: { port: 5173, strictPort: true, proxy },
+  // allowedHosts: vite's Host-header check (DNS-rebinding protection) rejects
+  // anything not on this list by default, and the e2e Playwright container
+  // reaches this one over the compose network by service name, not localhost.
+  preview: { port: 5173, strictPort: true, proxy, allowedHosts: ["frontend"] },
 });

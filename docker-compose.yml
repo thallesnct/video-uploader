@@ -103,20 +103,31 @@ services:
       postgres:
         condition: service_healthy
 
+  # api/worker-probe/worker-transcode/projector all need Kafka topics (and
+  # api/worker-transcode/projector a migrated schema) to exist before they can
+  # start without crash-looping — `UnknownTopicOrPartitionError` otherwise,
+  # found running this stack for real in Phase 8. `make up` brings up only the
+  # infra services and bootstraps them; profiles: ["app"] keeps these four out
+  # of that bare `docker compose up` so bootstrap always wins the race. `make
+  # e2e` starts this profile explicitly, after bootstrap and migrate.
   api:
     build:
       context: ./backend
       dockerfile: services/api/Dockerfile
     container_name: vp-api
+    profiles: ["app"]
     ports:
       - "${API_PORT:-8000}:8000"
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       S3_ENDPOINT: http://minio:9000
-      # A presigned URL's signature covers its host — the browser cannot
-      # resolve "minio", only "localhost" (ADR-0006 follow-on).
-      S3_PUBLIC_ENDPOINT: http://localhost:${MINIO_API_PORT:-9000}
+      # A presigned URL's signature covers its host — a host-run browser
+      # can't resolve "minio", only "localhost" (ADR-0006 follow-on).
+      # Overridden to http://minio:9000 for `make e2e`: there the browser
+      # itself runs inside the compose network (Playwright's container), so
+      # "localhost" would mean that container, not the host.
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:9000}
       S3_ACCESS_KEY: ${MINIO_ROOT_USER}
       S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
       S3_BUCKET: ${S3_BUCKET}
@@ -156,6 +167,7 @@ services:
       dockerfile: services/worker_probe/Dockerfile
       target: runtime
     container_name: vp-worker-probe
+    profiles: ["app"]
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       S3_ENDPOINT: http://minio:9000
@@ -193,6 +205,7 @@ services:
       dockerfile: services/worker_transcode/Dockerfile
       target: runtime
     container_name: vp-worker-transcode
+    profiles: ["app"]
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
@@ -229,6 +242,7 @@ services:
       dockerfile: services/projector/Dockerfile
       target: runtime
     container_name: vp-projector
+    profiles: ["app"]
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
@@ -248,6 +262,33 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/healthz')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # e2e-only: profiles keeps it out of plain `make up`. Not given the
+  # ADR-0015 hardening the backend services get (read_only, tmpfs, cap_drop)
+  # — it's test tooling that never runs in prod, not a deployed component,
+  # and `vite preview` wants to write its own cache under node_modules/.vite.
+  frontend:
+    build:
+      context: ./frontend
+    container_name: vp-frontend
+    profiles: ["e2e"]
+    ports:
+      - "${FRONTEND_PORT:-5173}:5173"
+    environment:
+      # Resolved inside the compose network, not localhost (vite.config.ts's
+      # proxy falls back to localhost for host-run `npm run dev`).
+      VITE_PROXY_API_TARGET: http://api:8000
+      VITE_PROXY_AUTH_TARGET: http://devauth:8080
+    depends_on:
+      api:
+        condition: service_healthy
+      devauth:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:5173',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))\""]
       interval: 10s
       timeout: 5s
       retries: 10

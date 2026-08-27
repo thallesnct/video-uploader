@@ -20,7 +20,7 @@ endif
 DC_OBS  := docker compose -f docker-compose.yml -f docker-compose.obs.yml
 
 .DEFAULT_GOAL := help
-.PHONY: help up down logs ps topics buckets bootstrap smoke \
+.PHONY: help up down logs ps topics buckets bootstrap smoke migrate \
         obs-up obs-down obs-verify unit integration e2e lint ci security-verify
 
 help: ## List targets
@@ -33,6 +33,9 @@ help: ## List targets
 up: .env ## Start Kafka (KRaft), Postgres and MinIO, then bootstrap them
 	$(COMPOSE) up -d --wait
 	@$(MAKE) --no-print-directory bootstrap
+
+migrate: .env ## Apply database migrations (idempotent)
+	$(COMPOSE) run --rm migrate
 
 down: ## Stop everything and drop volumes
 	$(DC_OBS) down -v --remove-orphans
@@ -88,7 +91,9 @@ $(HOST_VENV)/bin/pytest: backend/requirements-dev.txt
 ifdef UV
   RUN_HOST := uv run --directory backend --extra dev
 else
-  RUN_HOST := $(HOST_VENV)/bin/python -m
+  # No --directory equivalent for a plain venv's python — cd there instead.
+  # $(CURDIR) makes the venv path itself immune to that cd.
+  RUN_HOST := cd backend && $(CURDIR)/$(HOST_VENV)/bin/python -m
 endif
 
 integration: ## Tests against real Kafka/Postgres/MinIO via testcontainers
@@ -102,8 +107,37 @@ ffmpeg-tests: ## Run the ffmpeg-dependent tests inside the worker image
 	  -t vp-worker-probe:test backend
 	docker run --rm vp-worker-probe:test pytest tests/ffmpeg -q -p no:cacheprovider $(ARGS)
 
-e2e: ## Full compose + Playwright
-	@echo "not implemented until Phase 8" && exit 1
+# No media in git (AGENTS.md): the fixture is the same 2-second clip already
+# baked into worker-probe's image (its ffmpeg-base stage), extracted once
+# rather than re-encoded — ffmpeg isn't on the host at all.
+E2E_FIXTURE := tests/e2e/.fixtures/testsrc-640x360.mp4
+$(E2E_FIXTURE):
+	@mkdir -p $(dir $(E2E_FIXTURE))
+	cid=$$(docker create video-pipeline-worker-probe); \
+	docker cp $$cid:/app/fixtures/testsrc-640x360.mp4 $(E2E_FIXTURE); \
+	docker rm $$cid >/dev/null
+
+# Two waves, not one `docker compose up` for everything: api/worker-*/
+# projector need topics (and a migrated schema) to exist before they can start
+# without crash-looping (docker-compose.yml's comment on the `app` profile).
+# `make up` brings up and bootstraps the infra tier first; only then does the
+# app tier (plus the e2e-only frontend) start.
+#
+# Playwright itself runs containerized (Microsoft's official image, joined to
+# the compose network) rather than on the host: there is no Chromium build
+# for every host OS/arch combination (hit exactly this — "Playwright does not
+# support chromium on mac13-arm64" — scaffolding this phase), and CI would run
+# it in a container regardless, so this keeps the local and CI paths identical.
+e2e: up migrate ## Full compose + Playwright
+	# S3_PUBLIC_ENDPOINT=minio, not localhost: the browser driving this run is
+	# itself inside the compose network (Playwright's container), so a
+	# presigned URL signed for "localhost" would point nowhere reachable.
+	S3_PUBLIC_ENDPOINT=http://minio:9000 $(COMPOSE) --profile app --profile e2e up -d --build --wait
+	@$(MAKE) --no-print-directory $(E2E_FIXTURE)
+	docker run --rm --network video-pipeline_default \
+	  -v "$(CURDIR)/tests/e2e":/e2e -w /e2e \
+	  -e E2E_BASE_URL=http://frontend:5173 \
+	  mcr.microsoft.com/playwright:v1.62.1-noble sh -c "npm ci && npm test -- $(ARGS)"
 
 # infra/ sits outside backend/ on purpose (AGENTS.md: operator tooling that
 # runs before the backend's venv exists) but still wants the same lint rules —
