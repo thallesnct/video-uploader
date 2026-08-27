@@ -39,8 +39,10 @@ between the read and the attach is replayed from `events`, not dropped.
 - Every event carries `id:` = the `events` row id; on reconnect the browser sends
   `Last-Event-ID` automatically and the server replays from there.
 - `:heartbeat` comment every 15 s — keeps idle connections off LB/proxy timeouts.
-- `X-Accel-Buffering: no`, `Cache-Control: no-cache`, HTTP/2 preferred (HTTP/1.1
-  caps at ~6 connections per origin).
+- `X-Accel-Buffering: no`, `Cache-Control: no-store` (stricter than plain
+  `no-cache`; both forbid caching, `no-store` also forbids retaining the
+  response at all, which is what a live stream needs), HTTP/2 preferred
+  (HTTP/1.1 caps at ~6 connections per origin).
 - Server-side teardown on disconnect; a per-instance cap on concurrent streams.
 
 Event names: `snapshot`, `probed`, `rendition.completed`, `thumbnail.ready`,
@@ -72,3 +74,52 @@ Event names: `snapshot`, `probed`, `rendition.completed`, `thumbnail.ready`,
 - The `events` table is on the hot path for reconnects — it needs its index and a
   retention policy.
 - Load balancer idle timeout must exceed the heartbeat interval.
+
+## Follow-on decision: Kafka is a wake-up signal, not the SSE content source (2026-08-27)
+
+Discovered while building the gateway (Phase 7). The `id:` on every SSE event
+must be the `events` row id (this decision's own resumability mechanic), but
+that id is assigned by the **projector** when it writes the row — a different
+process, consuming the same topic independently and with no ordering
+guarantee relative to the SSE gateway's own consumption of it. Parsing the
+live Kafka message directly and inventing an id for it (a Kafka offset, a
+timestamp) would not be the same id the projector assigns, and `Last-Event-ID`
+resume depends on both sides agreeing on one number.
+
+Resolved by treating the two jobs as separate: **the SSE gateway's Kafka
+consumer only reads the message `key`** (already `str(video_id).encode()` —
+`Event.key`) to know which video changed, and does not parse the payload at
+all. That key is a pure wake-up signal for an `asyncio.Event` per (video_id,
+connection); the actual content and its `id:` always come from **re-querying
+Postgres** — `events` rows with `id > watermark` for that video — which is the
+same query a `Last-Event-ID` reconnect already needs, so fresh-connect and
+resume become the same code path with a different starting watermark. This
+also keeps poison-message handling exactly where ADR-0007 already put it: the
+gateway never calls `parse()`, so a malformed payload cannot affect it.
+
+The unavoidable consequence: a wake-up can arrive before the projector commits
+(they are unsynchronized consumers of the same topic), so the immediate
+re-query can find nothing new. This is not a correctness bug — the read model
+is already documented as eventually consistent (ADR-0007) — but left
+unhandled it degrades a live update to "arrives on the next heartbeat," which
+can be several seconds late. The gateway re-polls Postgres on a short bounded
+timeout (independent of the 15s keep-alive `ping` above) specifically to
+bound this tail case, not just to detect dropped connections.
+
+**Cross-phase interface contract for Phase 8:** a browser's `EventSource`
+auto-reconnects even after a clean server-initiated close — there is no
+"end of stream, don't retry" signal short of an HTTP 204, which this endpoint
+does not use. The backend closing the generator on `failed` (this ADR's
+"stream ends with `video.completed` or failed") does **not** stop the browser
+from retrying with the last `Last-Event-ID`, which the server will correctly
+answer with "nothing new" forever. The frontend **must** call
+`eventSource.close()` itself on receiving a `failed` or `video.completed`
+event. This is a client-side obligation, not something Phase 7 can enforce
+from the server, and Phase 8 must not skip it.
+
+Not yet handled: `video.completed` as a terminal event. Nothing in the
+pipeline emits `VideoState.COMPLETED` before Phase 9 (packaging), so its event
+shape isn't settled and terminal detection here only checks for `failed`. The
+gateway re-checks the video row's `status` column fresh every poll (not the
+event payload) specifically so this extends by widening one comparison in
+Phase 9 rather than by re-deriving terminality from event contents.
