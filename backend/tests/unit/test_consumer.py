@@ -12,7 +12,7 @@ from uuid import uuid4
 
 import pytest
 from pipeline import events
-from pipeline.consumer import StageWorker
+from pipeline.consumer import ConsumerGroupStalled, StageWorker
 from pipeline.retry import RetryPolicy, TerminalError, TransientError
 
 from tests.unit.fakes import FakeConsumer, FakeMessage, FakeProducer
@@ -334,6 +334,70 @@ def test_involuntarily_lost_partitions_raise_the_same_flag() -> None:
     consumer.on_lost(consumer, ["p0"])
 
     assert worker.revoked
+
+
+def test_seconds_unassigned_is_none_before_any_revocation() -> None:
+    worker = build(FakeConsumer([]), lambda event, view: None)
+    worker.subscribe()
+
+    assert worker.seconds_unassigned() is None
+
+
+def test_a_reassignment_clears_the_unassigned_clock() -> None:
+    consumer = FakeConsumer([])
+    worker = build(consumer, lambda event, view: None)
+    worker.subscribe()
+
+    consumer.on_revoke(consumer, ["p0"])
+    assert worker.seconds_unassigned() is not None
+
+    consumer.on_assign(consumer, ["p0"])
+    assert worker.seconds_unassigned() is None
+
+
+def test_a_brief_unassigned_period_does_not_crash_the_worker() -> None:
+    """An ordinary rebalance resolves in seconds — this must not be mistaken
+    for the broker-unavailable case ConsumerGroupStalled exists for."""
+    consumer = FakeConsumer([a_message()])
+    worker = StageWorker(
+        stage="transcode",
+        source_topic="rendition.requested",
+        consumer=consumer,
+        producer=FakeProducer(),
+        handler=lambda event, view: None,
+        policy=POLICY,
+        poll_timeout=0.01,
+        stall_timeout_s=10.0,
+    )
+    worker.subscribe()
+    consumer.on_revoke(consumer, ["p0"])
+    consumer.on_assign(consumer, ["p0"])  # reassigned well within the window
+
+    assert worker.run(max_messages=1) == 1
+
+
+def test_a_prolonged_unassigned_period_crashes_the_worker() -> None:
+    """A rebalance that never lands a new assignment is not a message to
+    retry — it is a broker-side stall this process cannot fix by waiting
+    longer (found running the real stack). Crashing is the only path to
+    recovery, paired with restart: unless-stopped in docker-compose.yml."""
+    consumer = FakeConsumer([])
+    worker = StageWorker(
+        stage="transcode",
+        source_topic="rendition.requested",
+        consumer=consumer,
+        producer=FakeProducer(),
+        handler=lambda event, view: None,
+        policy=POLICY,
+        poll_timeout=0.01,
+        stall_timeout_s=0.05,
+    )
+    worker.subscribe()
+    consumer.on_lost(consumer, ["p0"])
+    time.sleep(0.1)
+
+    with pytest.raises(ConsumerGroupStalled):
+        worker.run(max_messages=1)
 
 
 def test_both_producers_build_identical_headers() -> None:

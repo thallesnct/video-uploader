@@ -167,6 +167,10 @@ def main() -> None:
     # Must actually be able to fail. `head(...) is None or True` is always True,
     # which looks like coverage while reporting ready through a total outage.
     health.register("object_store", lambda: _bucket_reachable(store))
+    # A stale-but-true value here is fine: readiness only affects routing, and
+    # the actual recovery is `worker.run()` crashing on a real stall (see
+    # StageWorker._check_not_stalled) plus `restart: unless-stopped`.
+    health.register("kafka_group", lambda: worker.seconds_unassigned() is None)
     serve_health(health, observability_settings().metrics_port)
 
     worker.subscribe()

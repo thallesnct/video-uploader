@@ -86,6 +86,10 @@ def main() -> None:
 
     health = HealthRegistry()
     health.register("dependencies", lambda: _database_reachable(sessions_factory))
+    # A stale-but-true value here is fine: readiness only affects routing, and
+    # the actual recovery is `worker.run()` crashing on a real stall (see
+    # StageWorker._check_not_stalled) plus `restart: unless-stopped`.
+    health.register("kafka_group", lambda: worker.seconds_unassigned() is None)
     serve_health(health, observability_settings().metrics_port)
 
     worker.subscribe(topics=[VIDEO_STATUS, PIPELINE_FAILED])

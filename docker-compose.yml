@@ -115,6 +115,7 @@ services:
       context: ./backend
       dockerfile: services/api/Dockerfile
     container_name: vp-api
+    restart: unless-stopped
     profiles: ["app"]
     ports:
       - "${API_PORT:-8000}:8000"
@@ -167,6 +168,7 @@ services:
       dockerfile: services/worker_probe/Dockerfile
       target: runtime
     container_name: vp-worker-probe
+    restart: unless-stopped
     profiles: ["app"]
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
@@ -205,6 +207,7 @@ services:
       dockerfile: services/worker_transcode/Dockerfile
       target: runtime
     container_name: vp-worker-transcode
+    restart: unless-stopped
     profiles: ["app"]
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
@@ -242,6 +245,7 @@ services:
       dockerfile: services/projector/Dockerfile
       target: runtime
     container_name: vp-projector
+    restart: unless-stopped
     profiles: ["app"]
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092

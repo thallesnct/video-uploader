@@ -42,6 +42,12 @@ log = logging.getLogger(__name__)
 Handler = Callable[[Event, "MessageView"], None]
 
 
+class ConsumerGroupStalled(RuntimeError):
+    """Raised when a rebalance never lands a new assignment within a generous
+    window — see StageWorker._check_not_stalled for why this crashes rather
+    than waits indefinitely."""
+
+
 class ConsumerProtocol(Protocol):
     """The slice of confluent_kafka.Consumer this loop uses.
 
@@ -122,6 +128,7 @@ class StageWorker:
         handler: Handler,
         policy: RetryPolicy,
         poll_timeout: float = 1.0,
+        stall_timeout_s: float | None = None,
     ) -> None:
         self.stage = stage
         self.source_topic = source_topic
@@ -130,6 +137,11 @@ class StageWorker:
         self._handler = handler
         self._policy = policy
         self._poll_timeout = poll_timeout
+        self._stall_timeout_s = (
+            stall_timeout_s
+            if stall_timeout_s is not None
+            else kafka_settings().consumer_stall_timeout_s
+        )
         self._stopped = threading.Event()
         # Set when the group revokes our partitions mid-handler. Long handlers
         # should check it and abandon work that nobody will accept the result of.
@@ -139,9 +151,16 @@ class StageWorker:
         # rebalance assigns a new partition mid-handler). Never dropped.
         self._pending: list[Any] = []
         self._subscribed_topics: list[str] = [source_topic]
+        # None whenever we currently hold an assignment (or haven't subscribed
+        # yet); set to the moment we lost it otherwise. Distinct from
+        # `_revoked`, which is a per-message flag a handler checks and the
+        # next successful commit clears implicitly — this persists across
+        # messages until a real reassignment happens, which is exactly what a
+        # stall watchdog needs (ADR-0004 follow-on).
+        self._unassigned_since: float | None = None
 
     def subscribe(self, topics: list[str] | None = None) -> None:
-        """Subscribe, wiring the revocation callback.
+        """Subscribe, wiring the rebalance callbacks.
 
         A rebalance can still happen during long work — a scale event, or a new
         consumer joining — so handlers need a way to notice that the partition
@@ -150,6 +169,7 @@ class StageWorker:
         self._subscribed_topics = topics or [self.source_topic]
         self._consumer.subscribe(
             self._subscribed_topics,
+            on_assign=self._on_assign,
             on_revoke=self._on_revoke,
             # on_lost fires when partitions are taken involuntarily — the group
             # decided we were gone. That is the ADR-0004 eviction case itself, so
@@ -157,14 +177,54 @@ class StageWorker:
             on_lost=self._on_revoke,
         )
 
+    def _on_assign(self, consumer: Any, partitions: list[Any]) -> None:
+        log.info("partitions assigned: %s", partitions)
+        self._unassigned_since = None
+
     def _on_revoke(self, consumer: Any, partitions: list[Any]) -> None:
         log.warning("partitions revoked during processing: %s", partitions)
         self._revoked.set()
+        if self._unassigned_since is None:
+            self._unassigned_since = time.monotonic()
 
     @property
     def revoked(self) -> bool:
         """True when our partitions were taken away since this message started."""
         return self._revoked.is_set()
+
+    def seconds_unassigned(self) -> float | None:
+        """None while we hold an assignment; otherwise how long we haven't.
+
+        For `/readyz` visibility (ADR-0015: readiness checks dependencies) —
+        not the crash decision itself, which only `_check_not_stalled` makes,
+        from the poll loop. A momentary rebalance reporting "not ready" for a
+        few seconds is normal and expected; this is a diagnostic signal, not
+        a liveness check health.py's own docstring warns against building.
+        """
+        if self._unassigned_since is None:
+            return None
+        return time.monotonic() - self._unassigned_since
+
+    def _check_not_stalled(self) -> None:
+        """Crash if a rebalance has never landed a new assignment within a
+        generous window, rather than sit idle forever (found running the real
+        stack: a resource-starved single-node Kafka broker can leave every
+        consumer group's rejoin failing for minutes, not the seconds a normal
+        rebalance takes — and nothing in librdkafka's own retry loop gives up
+        and surfaces that as an error; it just keeps trying silently).
+
+        This is the same philosophy ADR-0005 already established for an
+        unroutable transient failure: crashing is the only way to guarantee
+        recovery here, because there is no in-process action left to take —
+        `restart: unless-stopped` (docker-compose.yml) is what actually
+        recovers it, by starting a fresh consumer that rejoins cleanly.
+        """
+        stalled_for = self.seconds_unassigned()
+        if stalled_for is not None and stalled_for > self._stall_timeout_s:
+            raise ConsumerGroupStalled(
+                f"{self.stage}: no partition assignment for {stalled_for:.0f}s "
+                f"(threshold {self._stall_timeout_s:.0f}s) — crashing for a clean restart"
+            )
 
     def wait_for_assignment(self, timeout: float = 30.0) -> list[Any]:
         """Poll until the group gives us partitions.
@@ -194,6 +254,7 @@ class StageWorker:
         handled = 0
         try:
             while not self._stopped.is_set():
+                self._check_not_stalled()
                 raw = self._next_message()
                 if raw is None:
                     continue
@@ -387,6 +448,7 @@ class StageWorker:
 
 
 __all__ = [
+    "ConsumerGroupStalled",
     "ConsumerProtocol",
     "FailureClass",
     "Handler",

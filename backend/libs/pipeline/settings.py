@@ -35,6 +35,12 @@ class KafkaSettings(BaseSettings):
     # One record per poll so a slow item never holds a batch of others hostage.
     max_poll_records: int = 1
     auto_offset_reset: str = "earliest"
+    # A rebalance that never lands a new assignment within this window crashes
+    # the worker (StageWorker._check_not_stalled) rather than sit idle forever
+    # — found running the real stack: a resource-starved broker can leave a
+    # rejoin failing for minutes, well past any normal rebalance. Comfortably
+    # above session_timeout_ms so this never fires for an ordinary rebalance.
+    consumer_stall_timeout_s: float = 180.0
 
 
 class S3Settings(BaseSettings):

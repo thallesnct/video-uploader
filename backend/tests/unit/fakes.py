@@ -52,6 +52,7 @@ class FakeConsumer:
         self.events: list[str] = []  # ordering ledger for assertions
         self.paused = False
         self.subscribed: list[str] = []
+        self.on_assign: Any = None
         self.on_revoke: Any = None
 
     def poll(self, timeout: float) -> FakeMessage | None:
@@ -62,6 +63,7 @@ class FakeConsumer:
 
     def subscribe(self, topics: list[str], **callbacks: Any) -> None:
         self.subscribed = list(topics)
+        self.on_assign = callbacks.get("on_assign")
         self.on_revoke = callbacks.get("on_revoke")
         self.on_lost = callbacks.get("on_lost")
 
