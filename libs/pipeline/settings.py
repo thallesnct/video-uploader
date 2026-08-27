@@ -111,6 +111,24 @@ class QuotaSettings(BaseSettings):
     max_videos_in_flight: int = 10
 
 
+class SSESettings(BaseSettings):
+    """Per-instance resource limits and timing for the SSE gateway (ADR-0008).
+
+    max_concurrent_streams protects one API replica's memory/fd usage — a
+    resource-exhaustion vector under the load testing this system is built
+    for, not a per-tenant fairness knob (that's QuotaSettings).
+    """
+
+    model_config = SettingsConfigDict(**_CONFIG, env_prefix="SSE_")
+
+    max_concurrent_streams: int = 500
+    ping_seconds: int = 15
+    # Independent of ping_seconds: this bounds how long a live update can be
+    # delayed if the gateway's Kafka wake-up arrives before the projector has
+    # committed the corresponding row (ADR-0008 follow-on) — not a keep-alive.
+    wakeup_poll_backstop_seconds: float = 5.0
+
+
 @lru_cache(maxsize=1)
 def auth_settings() -> AuthSettings:
     return AuthSettings()
@@ -139,3 +157,8 @@ def database_settings() -> DatabaseSettings:
 @lru_cache(maxsize=1)
 def observability_settings() -> ObservabilitySettings:
     return ObservabilitySettings()
+
+
+@lru_cache(maxsize=1)
+def sse_settings() -> SSESettings:
+    return SSESettings()

@@ -18,14 +18,16 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Response, status
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor  # noqa: E402
 from pipeline import storage
 from pipeline.auth import AuthError, Principal, TokenVerifier, bearer_token
+from pipeline.broadcast import StatusBroadcaster
 from pipeline.db import create_engine, session_scope, sessions
 from pipeline.events import VideoState, VideoStatusChanged, VideoUploaded
 from pipeline.obs import setup_tracing
 from pipeline.producer import AsyncEventProducer
 from pipeline.repository import VideoRepository
-from pipeline.settings import observability_settings, quota_settings
+from pipeline.settings import observability_settings, quota_settings, sse_settings
 from pipeline.topics import VIDEO_STATUS, VIDEO_UPLOADED
 from sqlalchemy import text
+from sse_starlette.sse import EventSourceResponse
 
 from services.api.schemas import (
     ALLOWED_CONTENT_TYPES,
@@ -33,6 +35,7 @@ from services.api.schemas import (
     CreateVideoResponse,
     VideoResponse,
 )
+from services.api.sse import sse_stream
 
 SERVICE = "api"
 
@@ -49,10 +52,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.producer = AsyncEventProducer(service=SERVICE)
     app.state.verifier = TokenVerifier()
     app.state.store = storage.object_store()
+    app.state.broadcaster = StatusBroadcaster()
+    app.state.sse_active = 0
     await app.state.producer.start()
+    await app.state.broadcaster.start()
     try:
         yield
     finally:
+        await app.state.broadcaster.stop()
         await app.state.producer.stop()
         await app.state.engine.dispose()
 
@@ -261,6 +268,52 @@ async def get_video(video_id: uuid.UUID, caller: Caller) -> VideoResponse:
         # a 403 would confirm the id exists.
         raise HTTPException(status.HTTP_404_NOT_FOUND, "video not found")
     return to_response(row)
+
+
+# --------------------------------------------------------------------- SSE
+
+
+@app.get("/videos/{video_id}/events")
+async def video_events(
+    video_id: uuid.UUID,
+    caller: Caller,
+    last_event_id: Annotated[int | None, Header(alias="Last-Event-ID")] = None,
+) -> EventSourceResponse:
+    """Snapshot then live deltas (ADR-0008), or replay from Last-Event-ID.
+
+    The concurrent-stream cap is checked here, advisory-only: two requests
+    can both pass it before either increments (the actual counting happens
+    once streaming starts, in counted_stream's try/finally, which is what
+    guarantees the decrement runs even if the client never reads a byte). A
+    small, bounded overshoot of a soft resource limit is an acceptable
+    trade for not needing a lock on every connection attempt.
+    """
+    limits = sse_settings()
+    if app.state.sse_active >= limits.max_concurrent_streams:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "too many concurrent event streams"
+        )
+
+    async with session_scope(app.state.sessions) as session:
+        row = await VideoRepository(session).get(caller.owner_id, video_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "video not found")
+
+    async def counted_stream() -> AsyncIterator[dict[str, str]]:
+        app.state.sse_active += 1
+        try:
+            async for item in sse_stream(
+                app.state.sessions,
+                app.state.broadcaster,
+                caller.owner_id,
+                video_id,
+                last_event_id,
+            ):
+                yield item
+        finally:
+            app.state.sse_active -= 1
+
+    return EventSourceResponse(counted_stream(), ping=limits.ping_seconds)
 
 
 def to_response(row: Any) -> VideoResponse:

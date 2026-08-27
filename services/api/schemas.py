@@ -63,3 +63,20 @@ class VideoResponse(BaseModel):
     expected_renditions: list[str] | None = None
     failure_reason: str | None = None
     created_at: datetime
+
+
+class RenditionSnapshot(BaseModel):
+    rendition: str
+    status: str | None = None
+    object_key: str | None = None
+    failure_reason: str | None = None
+    completed_at: datetime | None = None
+
+
+class VideoSnapshot(BaseModel):
+    """The first SSE event on a fresh connect (ADR-0008): a client connecting
+    after some renditions already finished must see them here, not wait for a
+    live rendition.completed that will never come again for a finished one."""
+
+    video: VideoResponse
+    renditions: list[RenditionSnapshot]

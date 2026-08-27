@@ -285,3 +285,40 @@ class ProjectorRepository:
             .on_conflict_do_nothing(index_elements=["event_id"])
         )
         self._session.execute(statement)
+
+
+class SSERepository:
+    """Read-only queries backing the SSE gateway (ADR-0008 follow-on).
+
+    Async, unlike RenditionRepository/ProjectorRepository — this serves the
+    API, not a confluent-kafka worker (ADR-0009). Both list_events_after and
+    max_event_id are scoped by video_id only, since events has no owner_id
+    column; the caller must have already checked video ownership via
+    VideoRepository.get() before ever reaching here, exactly as to_response()
+    already assumes elsewhere in the API.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def list_renditions(self, owner_id: str, video_id: UUID) -> list[RenditionRow]:
+        result = await self._session.execute(
+            select(RenditionRow)
+            .where(RenditionRow.owner_id == owner_id, RenditionRow.video_id == video_id)
+            .order_by(RenditionRow.rendition)
+        )
+        return list(result.scalars().all())
+
+    async def list_events_after(self, video_id: UUID, after_id: int) -> list[EventRow]:
+        result = await self._session.execute(
+            select(EventRow)
+            .where(EventRow.video_id == video_id, EventRow.id > after_id)
+            .order_by(EventRow.id)
+        )
+        return list(result.scalars().all())
+
+    async def max_event_id(self, video_id: UUID) -> int:
+        result = await self._session.execute(
+            select(func.max(EventRow.id)).where(EventRow.video_id == video_id)
+        )
+        return int(result.scalar_one() or 0)
