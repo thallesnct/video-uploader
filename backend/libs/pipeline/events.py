@@ -91,6 +91,10 @@ class VideoProbed(Event):
     # Chosen from the source, never a fixed ladder — the packaging join in
     # ADR-0013 waits on exactly this set.
     expected_renditions: list[Rendition]
+    # Phase 9 addition: optional per ADR-0003's evolution rule, even though
+    # the real producer always sets it — worker_thumbnail needs the source to
+    # download from, same value RenditionRequested.source_key already carries.
+    source_key: str | None = None
 
 
 class RenditionRequested(Event):

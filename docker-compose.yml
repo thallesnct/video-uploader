@@ -239,6 +239,41 @@ services:
       timeout: 5s
       retries: 10
 
+  worker-thumbnail:
+    build:
+      context: ./backend
+      dockerfile: services/worker_thumbnail/Dockerfile
+      target: runtime
+    container_name: vp-worker-thumbnail
+    restart: unless-stopped
+    profiles: ["app"]
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      S3_BUCKET: ${S3_BUCKET}
+      SERVICE_NAME: worker-thumbnail
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /scratch:uid=10006,gid=999
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    depends_on:
+      kafka:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/healthz')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   projector:
     build:
       context: ./backend

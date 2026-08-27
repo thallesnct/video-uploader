@@ -569,15 +569,60 @@ against both sides together.
 ## Phase 9 — Thumbnails, HLS & completion join `[ ]`
 Refs: ADR-0013
 
-- [ ] `worker_thumbnail`: poster + sprite sheet + WebVTT, off `video.probed`
+- [x] `worker_thumbnail`: poster + sprite sheet + WebVTT, off `video.probed`
 - [ ] `worker_transcode` also emits HLS segments + per-rendition playlist
 - [ ] `worker_package`: completion join — write `master.m3u8` only when every
       *expected* rendition is done, using the DB claim (`UPDATE … WHERE NOT
       packaged RETURNING`) so concurrent finishers elect exactly one packager
 - [ ] Emit `video.completed`; player in the UI
 
-**Gate:** `make e2e ARGS="-k hls"` — `master.m3u8` lists every rendition exactly once,
+**Gate:** `make e2e --grep hls` — `master.m3u8` lists every rendition exactly once,
 and a forced concurrent double-finish produces exactly one packaging run.
+(Corrected from the original `ARGS="-k hls"`: `ARGS` passes through to
+`playwright test`, which has no `-k` — established in Phase 8.)
+
+**`worker_thumbnail`, discovered mid-implementation:**
+
+1. **The race ADR-0013 assumes for `worker_package` also applies to
+   `video.status`'s `state` field, one stage earlier.** `_apply_status` sets
+   `status` unconditionally from whatever `state` a `video.status` event
+   carries, with no ordering guard — two producers (thumbnail, transcode) both
+   publish to it for the same video, unordered relative to each other. Publishing
+   `state=PROBED` from the thumbnail worker (which seemed natural — the whole
+   ladder hasn't started yet) risks regressing a video already advanced to
+   `TRANSCODING` by a faster-finishing rendition. Fixed by having
+   `worker_thumbnail` always publish `state=TRANSCODING`, same as
+   `worker_transcode` — both are sibling work within that one stage, so the
+   value never actually varies. Root cause (`_apply_status` has no monotonic
+   ordering guard at all) is unfixed and out of scope here; flagged for
+   whoever touches the projector next.
+2. **`VideoProbed` had nowhere to carry the source key.** `worker_thumbnail`
+   needs to download the original upload, but `VideoProbed` — unlike
+   `RenditionRequested` — never carried it (only `worker_probe` itself had
+   `event.object_key` from the `VideoUploaded` it consumed). Added
+   `source_key: str | None = None` to `VideoProbed` (optional per ADR-0003;
+   the real producer always sets it, but the field itself must not be
+   required for a message from an older producer to still parse), populated
+   by `worker_probe` from the same value `RenditionRequested.source_key`
+   already carries. A `None` is treated as terminal, not transient — there is
+   no retry that fixes a message an old producer already published.
+3. **ffmpeg's `fps` filter silently drops the sprite sheet on most real
+   durations, not just edge cases.** `tile_count`'s `ceil()` means the nominal
+   sample cadence's last period almost always extends past the source's
+   actual end (exact-multiple durations are the rare exception). Verified
+   empirically inside the worker image: `fps=1/N` over a period ffmpeg never
+   sees the end of emits *zero* frames — not the last one at EOF — so
+   `-frames:v 1` gets nothing to write and the whole sheet comes out empty
+   with exit code 0, no error. `plan_sprite` now spaces `count` tiles evenly
+   across the real `duration_s` with one slot of margin
+   (`duration_s / (count + 1)`) instead of using the nominal interval
+   directly, which also gives full-video scrubbing coverage for a source
+   capped at `MAX_TILES` rather than only covering its first chunk.
+4. **The mjpeg encoder rejects the `tile` filter's default color range.**
+   `-pix_fmt yuvj420p` is required on the sprite argv, or every sheet fails
+   with "Non full-range YUV is non-standard" — caught by the real-ffmpeg test
+   (`tests/ffmpeg/`), not the injected-fake unit path, which is exactly why
+   that split exists (ADR-0011).
 
 ## Phase 10 — Observability `[ ]`
 Refs: ADR-0010
@@ -725,6 +770,7 @@ bottleneck of each named.
 
 | Date | Change | Why |
 |---|---|---|
+| 2026-08-27 | Phase 9 schema landed (migration 0005); `worker_thumbnail` landed and its checkbox closed | Poster/sprite/VTT/master-playlist columns needed before any Phase 9 worker could write to them; thumbnail chosen first as the no-join, fastest-verifiable slice |
 | 2026-08-25 | Plan, tracker and ADRs 0001–0013 written | Project kickoff |
 | 2026-08-26 | Phase 5 transcode workers landed; the rebalance test survives a real KRaft broker with a reduced poll interval | "No duplicate output" proved to be a non-discriminating assertion — rewritten to handler-invocation-count before being trusted |
 | 2026-08-26 | Phase 4 probe stage landed; ladder is data-dependent and the plan/fan-out invariant is asserted | Gate split into an ffmpeg-free integration check and an in-image ffprobe check, rather than reinterpreting the original wording |

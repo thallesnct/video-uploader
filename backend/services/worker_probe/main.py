@@ -96,6 +96,7 @@ def build_handler(store: ObjectStore, producer: EventProducer, prober: Prober = 
                 video_codec=info.video_codec,
                 audio_codec=info.audio_codec,
                 expected_renditions=ladder,
+                source_key=event.object_key,
             ),
         )
 
