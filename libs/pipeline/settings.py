@@ -41,6 +41,12 @@ class S3Settings(BaseSettings):
     model_config = SettingsConfigDict(**_CONFIG, env_prefix="S3_")
 
     endpoint: str = "http://localhost:9000"
+    # The host a presigned URL is signed for and handed to the browser, when
+    # it differs from the endpoint the boto3 client itself dials internally
+    # (ADR-0006 follow-on) — e.g. the api container reaches MinIO at
+    # http://minio:9000, but a browser can only reach http://localhost:9000.
+    # None means "same as endpoint", which is correct for host-based dev/CI.
+    public_endpoint: str | None = None
     bucket: str = "videos"
     region: str = "us-east-1"
     # No defaults: credentials must come from the environment (ADR-0015).

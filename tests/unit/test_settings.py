@@ -73,3 +73,21 @@ def test_kafka_defaults_encode_the_adr_0004_stance() -> None:
 def test_presign_expiry_covers_a_slow_large_upload() -> None:
     resolved = settings.S3Settings(_env_file=None, access_key="k", secret_key="s")
     assert resolved.presign_put_expiry_s >= 3600
+
+
+def test_public_endpoint_defaults_to_unset_not_to_the_internal_endpoint() -> None:
+    """None means "same as endpoint" to ObjectStore (ADR-0006 follow-on) — it
+    must not silently default to a copy of `endpoint`, which would hide a
+    missing S3_PUBLIC_ENDPOINT in a containerized deployment instead of
+    falling through to the correct same-host behavior for host-based dev."""
+    resolved = settings.S3Settings(_env_file=None, access_key="k", secret_key="s")
+    assert resolved.public_endpoint is None
+
+
+def test_public_endpoint_is_read_from_its_own_variable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("S3_PUBLIC_ENDPOINT", "http://localhost:9000")
+    resolved = settings.S3Settings(
+        _env_file=None, access_key="k", secret_key="s", endpoint="http://minio:9000"
+    )
+    assert resolved.public_endpoint == "http://localhost:9000"
+    assert resolved.endpoint == "http://minio:9000"

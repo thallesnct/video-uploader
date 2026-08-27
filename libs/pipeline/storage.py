@@ -86,28 +86,50 @@ def scratch_key(owner_id: str, video_id: UUID | str, name: str) -> str:
 class ObjectStore:
     """Thin S3 wrapper. Kept small so swapping MinIO for S3 stays a config change."""
 
-    def __init__(self, client: Any | None = None) -> None:
+    def __init__(self, client: Any | None = None, presign_client: Any | None = None) -> None:
         self._settings = s3_settings()
         self._client = client
+        self._presign_client = presign_client
 
     @property
     def client(self) -> Any:
         if self._client is None:
-            import boto3  # imported lazily: key builders must work without creds
-            from botocore.config import Config
-
-            self._client = boto3.client(
-                "s3",
-                endpoint_url=self._settings.endpoint,
-                aws_access_key_id=self._settings.access_key,
-                aws_secret_access_key=self._settings.secret_key,
-                region_name=self._settings.region,
-                config=Config(
-                    signature_version="s3v4",
-                    retries={"max_attempts": 5, "mode": "standard"},
-                ),
-            )
+            self._client = self._new_client(self._settings.endpoint)
         return self._client
+
+    @property
+    def presign_client(self) -> Any:
+        """Only used to sign URLs handed to the browser (ADR-0006 follow-on).
+
+        A presigned URL's signature covers its host, so it must be built
+        against whatever host the browser can actually reach — which differs
+        from `client`'s endpoint when the API runs in a container (it dials
+        MinIO at http://minio:9000; a browser can only reach
+        http://localhost:9000). Reuses `client` outright when no public
+        endpoint is configured, which is correct for host-based dev/CI where
+        both are the same URL — no reason to hold two boto3 clients then.
+        """
+        if self._settings.public_endpoint is None:
+            return self.client
+        if self._presign_client is None:
+            self._presign_client = self._new_client(self._settings.public_endpoint)
+        return self._presign_client
+
+    def _new_client(self, endpoint: str) -> Any:
+        import boto3  # imported lazily: key builders must work without creds
+        from botocore.config import Config
+
+        return boto3.client(
+            "s3",
+            endpoint_url=endpoint,
+            aws_access_key_id=self._settings.access_key,
+            aws_secret_access_key=self._settings.secret_key,
+            region_name=self._settings.region,
+            config=Config(
+                signature_version="s3v4",
+                retries={"max_attempts": 5, "mode": "standard"},
+            ),
+        )
 
     @property
     def bucket(self) -> str:
@@ -127,7 +149,7 @@ class ObjectStore:
         if max_bytes is not None:
             params["ContentLength"] = max_bytes
         return str(
-            self.client.generate_presigned_url(
+            self.presign_client.generate_presigned_url(
                 "put_object",
                 Params=params,
                 ExpiresIn=self._settings.presign_put_expiry_s,
@@ -136,7 +158,7 @@ class ObjectStore:
 
     def presign_get(self, key: str) -> str:
         return str(
-            self.client.generate_presigned_url(
+            self.presign_client.generate_presigned_url(
                 "get_object",
                 Params={"Bucket": self.bucket, "Key": key},
                 ExpiresIn=self._settings.presign_get_expiry_s,
