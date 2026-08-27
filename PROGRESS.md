@@ -148,6 +148,18 @@ paused is stashed rather than dropped, and failures are produced and flushed
 `make unit` runs through `uv` — from the host when installed, otherwise in a
 container, so a machine with only Docker can still run everything.
 
+### Follow-on: a stalled rebalance that never recovers (2026-08-27, Phase 8)
+
+The eviction loop above handles a *long handler*; it had no answer for a
+*broker that stops answering group-coordination requests*, which is what
+actually happened running the real stack (see ADR-0004's follow-on and Phase
+8 finding #6, now closed rather than deferred to Phase 14). `StageWorker`
+now wires `on_assign` and crashes with `ConsumerGroupStalled` once it has
+held no assignment for longer than any ordinary rebalance takes;
+`docker-compose.yml`'s app-tier services gained `restart: unless-stopped` to
+make that crash self-heal. `make unit` (134) and `make integration` (50)
+both green with the change in place.
+
 ## Phase 3 — Upload path `[x]`
 Refs: ADR-0001, ADR-0006, ADR-0016
 
@@ -546,6 +558,14 @@ against both sides together.
    of sustained pressure for real, not just as an artifact of rebuilding
    five images back to back on a laptop.
 
+   **Update:** recurred twice more using the real frontend, hitting `probe`,
+   `transcode`, and `projector` simultaneously — clearly this session's own
+   `docker compose --build` activity as the trigger, not an e2e-specific
+   fluke. Mitigated in Phase 2's follow-on / ADR-0004's follow-on: a stall
+   watchdog crashes a worker that never recovers an assignment, paired with
+   `restart: unless-stopped`. Root cause (why rejoin itself keeps failing
+   for minutes under contention) is still open, tracked in Phase 14.
+
 ## Phase 9 — Thumbnails, HLS & completion join `[ ]`
 Refs: ADR-0013
 
@@ -678,12 +698,12 @@ measuring here is not "requests per second" — it is where the pipeline bends.
 - [ ] Scenario: noisy neighbour — one tenant floods; assert quotas keep the
       others' end-to-end latency within budget
 - [ ] Record the numbers as SLO baselines in ADR-0015, replacing its placeholders
-- [ ] Follow up on Phase 8 finding #6: a projector whose Kafka consumer group
-      session times out under sustained load did not resume on its own until
-      manually restarted. Not root-caused there — this phase's sustained
-      pressure (not just a laptop rebuilding five images back to back) is
-      the right place to reproduce it deliberately and confirm whether it's
-      broker-side unavailability or a real `StageWorker` rebalance defect.
+- [ ] Phase 8 finding #6 is mitigated (ADR-0004 follow-on: crash-and-restart
+      on a stalled rebalance), not root-caused. What actually stalls
+      librdkafka's rejoin for minutes under CPU contention, rather than the
+      seconds an ordinary rebalance takes, is still open — this phase's
+      sustained pressure (not just a laptop rebuilding five images back to
+      back) is the right place to reproduce it deliberately and find out.
 
 **Gate:** a documented run of all four scenarios with results committed, and the
 bottleneck of each named.
