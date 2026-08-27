@@ -37,10 +37,18 @@ class StatusBroadcaster:
         self._wakeups: dict[UUID, set[asyncio.Event]] = {}
 
     async def start(self) -> None:
-        """Connect and consume until stop(). Blocks until partitions are
-        assigned — aiokafka's start() already awaits this internally when
-        topics are passed to the constructor, verified against a real broker
-        rather than assumed."""
+        """Connect and consume until stop(). Blocks until ready to miss
+        nothing published from this point on.
+
+        aiokafka's start() awaits partition assignment internally when topics
+        are passed to the constructor (verified against a real broker), but
+        assignment is not the same milestone as "latest" being resolved to a
+        concrete fetch position — that resolution is otherwise lazy, and a
+        message published in the gap can be missed. Empirically reproduced
+        with two consumer groups starting close together (deterministic, not
+        rare, in that shape) and fixed by seek_to_end(), which forces the
+        resolution eagerly instead of waiting for the first fetch.
+        """
         if self._client is None:
             from aiokafka import AIOKafkaConsumer
 
@@ -56,6 +64,7 @@ class StatusBroadcaster:
                 enable_auto_commit=False,
             )
         await self._client.start()
+        await self._client.seek_to_end()
         self._task = asyncio.create_task(self._run())
 
     async def stop(self) -> None:
