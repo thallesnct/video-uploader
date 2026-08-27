@@ -363,3 +363,49 @@ def test_another_tenants_video_is_not_found(
 
     other = client.get(f"/videos/{video_id}/events", headers=auth("user|someone-else"))
     assert other.status_code == 404
+
+
+def test_the_sse_route_also_accepts_a_query_param_token(
+    environment: None,
+    kafka_bootstrap: str,
+    client: Any,
+    auth: Any,
+    mint: Any,
+    sync_sessions_factory: Any,
+) -> None:
+    """EventSource cannot set headers (ADR-0008 follow-on) — this is the only
+    route that accepts ?access_token=, and it must actually authenticate,
+    not just be accepted syntactically. The video is failed before any of
+    these requests: TestClient blocks until the stream terminates on its own
+    (verified in Phase 7 — it buffers a whole response before returning any
+    of it), so a non-terminal video here would hang the test forever."""
+    resp = client.post(
+        "/videos",
+        json={"filename": "clip.mp4", "content_type": "video/mp4", "size_bytes": 256},
+        headers=auth(OWNER),
+    )
+    video_id = resp.json()["video_id"]
+
+    projector_handler(sync_sessions_factory)(
+        PipelineFailed(
+            video_id=uuid.UUID(video_id),
+            owner_id=OWNER,
+            producer="transcode",
+            stage="worker-transcode",
+            reason="TerminalError: unsupported codec",
+            terminal=True,
+        ),
+        _View(),
+    )
+
+    ok = client.get(f"/videos/{video_id}/events?access_token={mint(OWNER)}")
+    assert ok.status_code == 200
+
+    wrong_owner = client.get(f"/videos/{video_id}/events?access_token={mint('user|someone-else')}")
+    assert wrong_owner.status_code == 404
+
+    no_token = client.get(f"/videos/{video_id}/events")
+    assert no_token.status_code == 401
+
+    bad_token = client.get(f"/videos/{video_id}/events?access_token=not-a-real-token")
+    assert bad_token.status_code == 401

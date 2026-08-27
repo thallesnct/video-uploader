@@ -117,6 +117,21 @@ class QuotaSettings(BaseSettings):
     max_videos_in_flight: int = 10
 
 
+class APISettings(BaseSettings):
+    """API-only config that isn't shared with the workers."""
+
+    model_config = SettingsConfigDict(**_CONFIG, env_prefix="API_")
+
+    # Comma-separated, like MINIO_API_CORS_ALLOW_ORIGIN — the frontend (Vite,
+    # default port 5173) is a different origin from the API, so every request
+    # is cross-origin without this (Phase 8).
+    cors_allow_origins: str = "http://localhost:5173"
+
+    @property
+    def cors_allow_origins_list(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_allow_origins.split(",") if origin.strip()]
+
+
 class SSESettings(BaseSettings):
     """Per-instance resource limits and timing for the SSE gateway (ADR-0008).
 
@@ -168,3 +183,8 @@ def observability_settings() -> ObservabilitySettings:
 @lru_cache(maxsize=1)
 def sse_settings() -> SSESettings:
     return SSESettings()
+
+
+@lru_cache(maxsize=1)
+def api_settings() -> APISettings:
+    return APISettings()

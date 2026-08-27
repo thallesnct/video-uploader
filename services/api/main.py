@@ -14,7 +14,8 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Response, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response, status
+from fastapi.middleware.cors import CORSMiddleware
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor  # noqa: E402
 from pipeline import storage
 from pipeline.auth import AuthError, Principal, TokenVerifier, bearer_token
@@ -24,7 +25,7 @@ from pipeline.events import VideoState, VideoStatusChanged, VideoUploaded
 from pipeline.obs import setup_tracing
 from pipeline.producer import AsyncEventProducer
 from pipeline.repository import VideoRepository
-from pipeline.settings import observability_settings, quota_settings, sse_settings
+from pipeline.settings import api_settings, observability_settings, quota_settings, sse_settings
 from pipeline.topics import VIDEO_STATUS, VIDEO_UPLOADED
 from sqlalchemy import text
 from sse_starlette.sse import EventSourceResponse
@@ -66,6 +67,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="video pipeline API", lifespan=lifespan)
 
+# Added at module level, same reason as the tracing instrumentation below:
+# Starlette builds its middleware stack before lifespan runs. The frontend
+# (Vite, default port 5173) is a different origin from this API, so every
+# request is cross-origin without this (Phase 8). No cookies are used for
+# auth (ADR-0016, ADR-0008 follow-on — a bearer token, header or query
+# param), so allow_credentials stays False; broadening it would need the
+# origin list to be exact rather than wildcard-friendly.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=api_settings().cors_allow_origins_list,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Authorization", "Content-Type"],
+)
+
 # Instrumented at import, not inside the lifespan: Starlette builds its
 # middleware stack before lifespan runs, so instrumenting there silently never
 # takes effect — the app works, and every message quietly loses its traceparent.
@@ -80,11 +95,9 @@ FastAPIInstrumentor.instrument_app(app)
 # ------------------------------------------------------------------ dependencies
 
 
-async def current_principal(
-    authorization: Annotated[str | None, Header()] = None,
-) -> Principal:
+def _verify_or_401(raw_token: str) -> Principal:
     try:
-        return app.state.verifier.verify(bearer_token(authorization))
+        return app.state.verifier.verify(raw_token)
     except AuthError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -93,7 +106,41 @@ async def current_principal(
         ) from exc
 
 
+async def current_principal(
+    authorization: Annotated[str | None, Header()] = None,
+) -> Principal:
+    try:
+        raw_token = bearer_token(authorization)
+    except AuthError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+    return _verify_or_401(raw_token)
+
+
+async def sse_principal(
+    authorization: Annotated[str | None, Header()] = None,
+    access_token: Annotated[str | None, Query()] = None,
+) -> Principal:
+    """SSE-only: EventSource cannot set headers (ADR-0008 follow-on), so this
+    route alone also accepts the token as a query parameter. The header wins
+    when both are present; this is additive, not a weaker trust path — the
+    same TokenVerifier.verify() runs either way."""
+    if authorization:
+        return await current_principal(authorization)
+    if access_token:
+        return _verify_or_401(access_token)
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="missing token (Authorization header or access_token query param)",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
 Caller = Annotated[Principal, Depends(current_principal)]
+SSECaller = Annotated[Principal, Depends(sse_principal)]
 
 
 # ----------------------------------------------------------------------- probes
@@ -276,7 +323,7 @@ async def get_video(video_id: uuid.UUID, caller: Caller) -> VideoResponse:
 @app.get("/videos/{video_id}/events")
 async def video_events(
     video_id: uuid.UUID,
-    caller: Caller,
+    caller: SSECaller,
     last_event_id: Annotated[int | None, Header(alias="Last-Event-ID")] = None,
 ) -> EventSourceResponse:
     """Snapshot then live deltas (ADR-0008), or replay from Last-Event-ID.
