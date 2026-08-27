@@ -1,0 +1,25 @@
+.topbar { display: flex; align-items: center; gap: var(--space-lg); margin-bottom: var(--space-xl); }
+.topbar h1 { flex: 1; font-size: 1.1rem; margin: 0; }
+.muted { color: var(--color-muted); font-size: var(--font-size-md); }
+.error { color: var(--color-error-text); }
+.link { background: none; border: none; color: var(--color-link); padding: 0; text-decoration: underline; }
+.card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-xl);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+.videoList { list-style: none; padding: 0; display: flex; flex-direction: column; gap: var(--space-sm); }
+.videoList li { display: flex; justify-content: space-between; align-items: center; }
+.badge {
+  font-size: var(--font-size-sm);
+  padding: 0.15rem var(--space-sm);
+  border-radius: var(--radius-pill);
+  background: var(--color-badge-bg);
+}
+.badgeCompleted { background: var(--color-success-bg); color: var(--color-success-fg); }
+.badgeFailed { background: var(--color-error-bg); color: var(--color-error-fg); }
+.badgeTranscoding, .badgeProbed, .badgePackaging { background: var(--color-warning-bg); color: var(--color-warning-fg); }

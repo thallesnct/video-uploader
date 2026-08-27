@@ -1,0 +1,13 @@
+.centered { min-height: 100vh; display: grid; place-items: center; }
+.card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-xl);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  min-width: 280px;
+}
+.muted { color: var(--color-muted); font-size: var(--font-size-md); }
+.error { color: var(--color-error-text); }

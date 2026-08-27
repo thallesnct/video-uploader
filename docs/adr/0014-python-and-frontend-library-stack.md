@@ -79,3 +79,22 @@ loop), Postgres 16, MinIO, Prometheus, Grafana, Tempo, OTel Collector,
 - `uv` and pinned lockfiles mean dependency updates are a deliberate, reviewable
   change (Renovate/Dependabot PRs), not a rebuild-time surprise.
 - Every dependency above is pinned; the image is scanned in CI (ADR-0015).
+
+## Follow-on: TanStack Router added (Phase 8, 2026-08-27)
+
+The original table named no router at all — two screens seemed small enough to
+switch on `window.location.pathname` by hand. That held for exactly as long as
+there were two screens with no deep-linkable state. It was already the wrong
+call by the end of Phase 8: a hand-rolled switch reimplements, worse, what a
+router exists to get right — intercepting link clicks without stealing
+modifier-click/middle-click, `popstate` handling, typed route params instead
+of a regex match. Phase 9 adds a player page and Phase 11 a failure-detail
+view, and either could easily want query-param state (a selected rendition,
+a filter) — the shape this project's own framing (production-grade, not a
+demo) argues against re-deriving by hand.
+
+**TanStack Router**, not react-router or a framework router: same family and
+API philosophy as TanStack Query, which the original table already justified
+("cache invalidation on SSE events is a one-liner"), and fully type-safe
+route params without a code-generation step for a route tree this small.
+Two routes: `/` (upload + video list) and `/videos/$videoId` (detail).

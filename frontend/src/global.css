@@ -1,0 +1,57 @@
+/* Design tokens. Every color/spacing/radius value anywhere in the app comes
+ * from one of these — a component's own *.module.css never hardcodes a hex
+ * value, so a palette change is a one-file edit instead of a grep-and-replace
+ * (light-mode support, if this ever needs it, is the same one-file edit). */
+:root {
+  --color-bg: #0f1115;
+  --color-surface: #1a1d24;
+  --color-border: #2a2e37;
+  --color-text: #e6e6e6;
+  --color-muted: #8a8f98;
+  --color-link: #6ea8fe;
+  --color-error-bg: #4b1f1f;
+  --color-error-fg: #ff8a8a;
+  --color-error-text: #ff6b6b;
+  --color-success-bg: #1f4b2f;
+  --color-success-fg: #6fe08a;
+  --color-warning-bg: #4b3f1f;
+  --color-warning-fg: #ffd76f;
+  --color-badge-bg: var(--color-border);
+
+  --space-xs: 0.4rem;
+  --space-sm: 0.5rem;
+  --space-md: 0.75rem;
+  --space-lg: 1rem;
+  --space-xl: 1.5rem;
+  --space-2xl: 2rem;
+
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-pill: 999px;
+
+  --font-size-sm: 0.75rem;
+  --font-size-md: 0.9rem;
+}
+
+/* True global concerns only — everything component-specific lives in that
+ * component's own *.module.css, scoped by Vite/PostCSS so nothing here can
+ * collide with it. */
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, sans-serif;
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+main { max-width: 720px; margin: 0 auto; padding: var(--space-2xl) var(--space-lg); }
+input, button {
+  font: inherit;
+  padding: var(--space-sm) var(--space-md);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  color: inherit;
+}
+button { cursor: pointer; }
+button:disabled { opacity: 0.5; cursor: default; }
+progress { width: 100%; }

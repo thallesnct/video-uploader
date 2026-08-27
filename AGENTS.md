@@ -75,13 +75,29 @@ Run `make unit` constantly; `make integration` before declaring a stage done.
 
 ## Code layout
 
-- `libs/pipeline/` — shared: event envelope, topic registry, producer/consumer
-  wrappers, storage, retry/DLQ, observability bootstrap. **New cross-service
-  logic goes here, not copied between services.**
-- `services/<name>/` — one process each; thin, using `libs/pipeline`.
-- `web/` — React + TS + Vite.
+Backend (Python) and frontend (TS) are separate top-level trees, each with its
+own manifest and dependency graph (`backend/pyproject.toml` + `uv.lock` vs.
+`frontend/package.json`) — nothing under one imports from the other. What
+orchestrates *both* (`docker-compose.yml`, `Makefile`, `docs/`, `tests/e2e/`,
+`ops/`) stays at the true repo root, never inside either tree, because it has
+to stand above the boundary it's proving.
+
+- `backend/libs/pipeline/` — shared: event envelope, topic registry,
+  producer/consumer wrappers, storage, retry/DLQ, observability bootstrap.
+  **New cross-service logic goes here, not copied between services.**
+- `backend/services/<name>/` — one process each; thin, using `libs/pipeline`.
+- `backend/migrations/`, `backend/tests/{unit,integration,ffmpeg}/`.
+- `frontend/` — React + TS + Vite. Its own `package.json`/lockfile; nothing
+  here reaches into `backend/` except through the API over HTTP/SSE.
+- `infra/` — Kafka topic/MinIO bootstrap scripts. Stays at root (not
+  `backend/`) because it's operator tooling that runs *before* the backend's
+  venv exists, but it still imports `backend/libs/pipeline/topics.json` as
+  data, so it shares `backend/pyproject.toml`'s ruff config explicitly
+  (`--config backend/pyproject.toml`) rather than relying on path discovery.
 - `ops/` — Prometheus config, **provisioned** Grafana dashboard JSON, Tempo, OTel.
-- `tests/{unit,integration,e2e}/`.
+- `tests/e2e/` — Playwright, at the true root, not under either tree: it drives
+  a browser against `frontend/` talking to the full `backend/` compose stack,
+  so it belongs to neither side alone.
 
 ## Conventions
 
@@ -95,6 +111,26 @@ Run `make unit` constantly; `make integration` before declaring a stage done.
 - Object keys are built by `libs/pipeline/storage.py` helpers, never f-strings
   at the call site.
 - Structured JSON logs with `video_id` and `trace_id` on every line.
+- Frontend styling is CSS Modules, one `Component.module.css` colocated next
+  to each `Component.tsx` — never a single shared stylesheet of global class
+  names. Only true cross-component concerns (body background, box-sizing,
+  font stack) live in `frontend/src/global.css`. A small utility class
+  (`.muted`, `.error`) duplicated across a couple of modules is fine; it's
+  cheaper than a shared-but-not-quite-global module a reader has to go find.
+- Every color, spacing, and radius value in a `*.module.css` file is a
+  `var(--token)` from `frontend/src/global.css`'s `:root` block, never a
+  hardcoded hex/rem literal — a palette change stays a one-file edit.
+- A component with more than one file (a `.tsx` plus its `.module.css`, or a
+  test alongside it) gets its own subfolder — `pages/UploadPage/UploadPage.tsx`
+  + `UploadPage.module.css`, not two files sitting loose in `pages/`.
+- Frontend API writes go through TanStack Query's `useMutation`, never a
+  hand-rolled `async function` + local `useState` for pending/error tracking
+  in the component. Sub-step UI state that changes *during* one mutation
+  (an upload-progress percentage, a "creating…/uploading…/completing…" label)
+  stays local `useState` next to it — that part isn't server-cache state and
+  `useMutation` doesn't model it — but the pending/error/success outcome and
+  any resulting cache invalidation (`queryClient.invalidateQueries`) belong to
+  the mutation, not a `try`/`catch` in the component.
 
 ## Definition of done for a stage
 
