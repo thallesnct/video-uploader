@@ -1,7 +1,13 @@
 import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { completeUpload, createVideo, listVideos, uploadWithProgress } from "../../api/client";
+import {
+  cancelVideo,
+  completeUpload,
+  createVideo,
+  listVideos,
+  uploadWithProgress,
+} from "../../api/client";
 import type { VideoStatus } from "../../api/types";
 import { useRequiredSession } from "../../session";
 import styles from "./UploadPage.module.css";
@@ -69,6 +75,11 @@ export function UploadPage() {
     onSettled: () => setStep(null),
   });
 
+  const cancel = useMutation({
+    mutationFn: (videoId: string) => cancelVideo(token, videoId),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["videos"] }),
+  });
+
   return (
     <main>
       <header className={styles.topbar}>
@@ -119,6 +130,15 @@ export function UploadPage() {
               <span className={`${styles.badge} ${STATUS_BADGE[v.status] ?? ""}`}>
                 {v.status}
               </span>
+              {v.status === "awaiting_upload" && (
+                <button
+                  className={styles.link}
+                  disabled={cancel.isPending}
+                  onClick={() => cancel.mutate(v.video_id)}
+                >
+                  cancel
+                </button>
+              )}
             </li>
           ))}
         </ul>

@@ -49,6 +49,20 @@ export function completeUpload(token: string, videoId: string): Promise<VideoRes
   return request<VideoResponse>(`/videos/${videoId}/complete`, token, { method: "POST" });
 }
 
+/** Not routed through request<T>: a successful cancel returns 204 with no
+ * body, and .json() on an empty body throws. Only ever valid before
+ * /complete has run (ADR-0006 follow-on) — the API returns 409 otherwise. */
+export async function cancelVideo(token: string, videoId: string): Promise<void> {
+  const response = await fetch(`/api/videos/${videoId}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    const body = await response.text();
+    throw new ApiError(response.status, body || response.statusText);
+  }
+}
+
 /** XHR, not fetch: fetch has no upload-progress event (ADR-0014 — start with
  * the smallest thing that shows a progress bar). Uploads straight to the
  * presigned MinIO URL, never through this API (ADR-0001/0006). */
