@@ -86,3 +86,71 @@ Supporting settings:
 - Integration test (Phase 5) must include a transcode that deliberately outlives
   `max.poll.interval.ms` and assert no redelivery. This test is the reason the
   ADR exists — without it the bug returns silently.
+
+## Follow-on: a rebalance that never lands a new assignment (2026-08-27)
+
+Hit directly, twice, running the real compose stack on a resource-constrained
+dev machine: `probe`, `transcode`, and `projector`'s consumer groups all lost
+their coordinator at once (`SESSTMOUT` — "session timed out ... after 45131 ms
+without a successful response from the group coordinator") during a burst of
+unrelated CPU load (rebuilding another container's image). Each logged
+"revoking assignment and rejoining group" and then produced no further
+activity — no error, no crash, just silence — while videos already probed and
+even transcoded sat unrecorded because `projector` never rejoined to apply
+them. A plain restart (no rebuild) recovered each one instantly, which rules
+out a stuck handler or a bad message: the broker itself was the bottleneck,
+and librdkafka's automatic rejoin, whatever it was doing, was not completing.
+
+This ADR's own pause/resume loop was never the problem — it exists to survive
+a *long handler*, not a *broker that stops answering group-coordination
+requests*. There was no mechanism at all for the second case: `poll()` keeps
+getting called forever, keeps returning nothing, and nothing treats "no
+assignment for an abnormally long time" as a failure worth acting on.
+
+**Fix: a stall watchdog, not a longer timeout.** Raising `session.timeout.ms`
+would only delay the first rebalance, not guarantee the rejoin afterward
+succeeds — the observed stalls lasted minutes, not fractions of a session
+timeout. Instead, `StageWorker` now tracks how long it has held *no*
+assignment (`on_assign`/`on_revoke`/`on_lost` all wired, where before only the
+revoke path was) and, from the poll loop itself, crashes with
+`ConsumerGroupStalled` once that exceeds `KafkaSettings.consumer_stall_timeout_s`
+(180s default — comfortably above any ordinary rebalance, which resolves in
+seconds). This is the exact philosophy ADR-0005 already established for an
+unroutable transient failure: there is no in-process fix available, so
+crashing and letting a fresh process rejoin cleanly is the only path to
+recovery. `docker-compose.yml`'s `api`/`worker-probe`/`worker-transcode`/
+`projector` all gained `restart: unless-stopped` to make that crash actually
+self-heal — the gap ADR-0005's own Consequences section had already flagged
+("no such orchestrator exists yet ... requires a manual restart") and deferred
+to Phase 13. Landed now instead, because this bit interactive dev use twice
+in one session, not just a hypothetical production concern.
+
+A parallel `seconds_unassigned()` accessor is registered as a `/readyz`
+dependency check (`kafka_group`) in each worker — diagnostic visibility only,
+never the crash trigger itself. Wiring it to `/healthz` instead would be
+exactly the mistake `health.py`'s own docstring warns against: a normal,
+harmless rebalance would flip liveness during every scale event.
+
+**Deliberately not extended to the API's SSE broadcaster.** `StatusBroadcaster`
+(aiokafka, ADR-0008) hit the same symptom in the same incident — but its
+consumer group is ephemeral (`sse-gateway-{uuid}`, recreated with the process),
+its failure degrades a live update to "reconnect and get a fresh snapshot"
+rather than halting the pipeline, and aiokafka's rebalance callbacks are
+async — a structurally different implementation, not a copy-paste of this
+fix. Flagged as a known gap with the same root cause, not fixed here.
+
+### Consequences
+
+- `stall_timeout_s` is a constructor parameter (defaults to
+  `KafkaSettings.consumer_stall_timeout_s`) specifically so tests can set it
+  to milliseconds rather than wait out 180 real seconds.
+- A worker that crash-loops on `ConsumerGroupStalled` every ~180s without ever
+  recovering means the broker itself is down, not just briefly unresponsive —
+  that failure mode was already going to page someone via Kafka's own health
+  checks; this does not make it worse, it just stops the affected workers
+  from sitting silently instead of visibly restarting.
+- Still open: what actually stalls librdkafka's rejoin for minutes under CPU
+  contention rather than seconds. Not root-caused — this fix bounds the
+  damage instead. Worth a closer look during Phase 14 load testing, which
+  will produce sustained pressure for real rather than as an artifact of
+  rebuilding images on a laptop.
