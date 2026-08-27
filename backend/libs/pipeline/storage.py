@@ -45,6 +45,13 @@ def hls_playlist_key(owner_id: str, video_id: UUID | str, rendition: str) -> str
     return f"{video_prefix(owner_id, video_id)}/hls/{rendition}/playlist.m3u8"
 
 
+def hls_segment_key(owner_id: str, video_id: UUID | str, rendition: str, filename: str) -> str:
+    """`filename` is an ffmpeg-generated segment name (e.g. `seg000.ts`), never
+    caller-constructed — it shares `hls_playlist_key`'s prefix so the
+    playlist's relative segment references resolve when served from there."""
+    return f"{video_prefix(owner_id, video_id)}/hls/{rendition}/{filename}"
+
+
 def hls_master_key(owner_id: str, video_id: UUID | str) -> str:
     return f"{video_prefix(owner_id, video_id)}/hls/master.m3u8"
 

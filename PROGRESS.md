@@ -570,7 +570,7 @@ against both sides together.
 Refs: ADR-0013
 
 - [x] `worker_thumbnail`: poster + sprite sheet + WebVTT, off `video.probed`
-- [ ] `worker_transcode` also emits HLS segments + per-rendition playlist
+- [x] `worker_transcode` also emits HLS segments + per-rendition playlist
 - [ ] `worker_package`: completion join — write `master.m3u8` only when every
       *expected* rendition is done, using the DB claim (`UPDATE … WHERE NOT
       packaged RETURNING`) so concurrent finishers elect exactly one packager
@@ -623,6 +623,34 @@ and a forced concurrent double-finish produces exactly one packaging run.
    with "Non full-range YUV is non-standard" — caught by the real-ffmpeg test
    (`tests/ffmpeg/`), not the injected-fake unit path, which is exactly why
    that split exists (ADR-0011).
+
+**`worker_transcode` + HLS, discovered mid-implementation:**
+
+1. **The MP4 and its HLS playlist are two separate promotes, so the existing
+   single-object idempotency check (Phase 5) was no longer sufficient.** An
+   attempt that dies between them leaves the rendition genuinely done but the
+   playlist missing, and nothing would ever revisit it — the message that
+   would trigger a retry already committed successfully the first time.
+   Widened the skip condition to require both the MP4 **and** the playlist
+   present; when only the MP4 exists, the handler remuxes from the existing
+   object (no re-claim, no re-download, no re-encode) rather than either
+   silently skipping or redoing the whole job. Covered by a dedicated
+   integration test, not just inferred from the redelivery test, since the
+   two failure windows are genuinely different states.
+2. **Remux, don't re-encode.** HLS segments are generated with `-c copy`
+   from the MP4 `worker_transcode` just produced, not from the original
+   source — it is already at the target rendition's exact
+   dimensions/bitrate, so a second encode pass would be pure waste.
+3. **`RenditionCompleted` had no playlist field either**, same shape as
+   `VideoProbed.source_key` from the thumbnail work above — added
+   `playlist_key: str | None = None` (ADR-0003) so `worker_package` (next)
+   can build `master.m3u8` from what it already consumes, without a DB
+   round trip or re-deriving the key itself.
+4. **Segments upload straight to their final keys; only the playlist goes
+   through scratch+promote.** Nothing references a segment until the
+   playlist that lists it is promoted, so only the playlist — the thing that
+   must never be readable half-written — needs the atomic-rename treatment
+   the MP4 rendition already gets.
 
 ## Phase 10 — Observability `[ ]`
 Refs: ADR-0010
@@ -770,6 +798,7 @@ bottleneck of each named.
 
 | Date | Change | Why |
 |---|---|---|
+| 2026-08-27 | `worker_transcode` gained HLS segmentation (remux, not re-encode); idempotency widened to MP4-and-playlist | An attempt dying between the MP4 and playlist promotes is a real, tested state, not hypothetical — a single-object existence check silently missed it |
 | 2026-08-27 | Phase 9 schema landed (migration 0005); `worker_thumbnail` landed and its checkbox closed | Poster/sprite/VTT/master-playlist columns needed before any Phase 9 worker could write to them; thumbnail chosen first as the no-join, fastest-verifiable slice |
 | 2026-08-25 | Plan, tracker and ADRs 0001–0013 written | Project kickoff |
 | 2026-08-26 | Phase 5 transcode workers landed; the rebalance test survives a real KRaft broker with a reduced poll interval | "No duplicate output" proved to be a non-discriminating assertion — rewritten to handler-invocation-count before being trusted |

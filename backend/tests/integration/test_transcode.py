@@ -10,6 +10,7 @@ consumer group (ADR-0004).
 from __future__ import annotations
 
 import json
+import os
 import time
 import uuid
 from typing import Any
@@ -18,9 +19,10 @@ import pytest
 from pipeline.consumer import StageWorker, consumer_config
 from pipeline.db import create_sync_engine, sync_sessions
 from pipeline.events import RenditionRequested
+from pipeline.hls import HlsResult
 from pipeline.producer import EventProducer
 from pipeline.retry import RetryPolicy, TerminalError
-from pipeline.storage import object_store
+from pipeline.storage import hls_playlist_key, object_store
 from pipeline.topics import (
     PIPELINE_FAILED,
     REGISTRY,
@@ -33,6 +35,20 @@ from pipeline.transcode import TranscodeResult
 from services.worker_transcode.main import build_handler
 
 OWNER = "user|transcode"
+
+
+def fake_hls(source: str, output_dir: str) -> HlsResult:
+    """Stands in for the real ffmpeg remux (ADR-0011) — writes a minimal but
+    real playlist + one segment so idempotency/existence checks have
+    something genuine to find."""
+    os.makedirs(output_dir, exist_ok=True)
+    playlist_path = os.path.join(output_dir, "playlist.m3u8")
+    segment_path = os.path.join(output_dir, "seg000.ts")
+    with open(playlist_path, "wb") as handle:
+        handle.write(b"#EXTM3U\n#EXT-X-ENDLIST\n")
+    with open(segment_path, "wb") as handle:
+        handle.write(b"\x00" * 64)
+    return HlsResult(playlist_path=playlist_path, segment_paths=(segment_path,))
 
 
 def messages_for(bootstrap: str, topic: str, video_id: str, seconds: float = 12.0) -> list[dict]:
@@ -139,7 +155,9 @@ def test_transcode_publishes_completion_and_writes_the_object(
         source_topic=RENDITION_REQUESTED,
         consumer=consumer,
         producer=producer,
-        handler=build_handler(store, producer, sessions_factory, transcode_fn=fake_transcode),
+        handler=build_handler(
+            store, producer, sessions_factory, transcode_fn=fake_transcode, hls_fn=fake_hls
+        ),
         policy=RetryPolicy(REGISTRY.retry_tiers),
         poll_timeout=0.5,
     )
@@ -156,13 +174,21 @@ def test_transcode_publishes_completion_and_writes_the_object(
     assert invocations == ["360p"]
     assert store.exists(target_key)
 
+    playlist_key = hls_playlist_key(OWNER, video_id, "360p")
+    assert store.exists(playlist_key)
+    assert store.exists(f"users/{OWNER}/videos/{video_id}/hls/360p/seg000.ts")
+
     completed = messages_for(kafka_bootstrap, RENDITION_COMPLETED, str(video_id))
     assert len(completed) == 1
     assert completed[0]["object_key"] == target_key
     assert completed[0]["size_bytes"] == 1024
+    assert completed[0]["playlist_key"] == playlist_key
 
     statuses = messages_for(kafka_bootstrap, VIDEO_STATUS, str(video_id))
-    assert any(s["state"] == "transcoding" and s["rendition"] == "360p" for s in statuses)
+    assert any(
+        s["state"] == "transcoding" and s["rendition"] == "360p" and s["rendition_playlist_key"]
+        for s in statuses
+    )
 
 
 # -------------------------------------------------------------- the whole point
@@ -232,7 +258,9 @@ def test_a_transcode_longer_than_the_poll_interval_survives_without_eviction(
         source_topic=RENDITION_REQUESTED,
         consumer=consumer,
         producer=producer,
-        handler=build_handler(store, producer, sessions_factory, transcode_fn=slow_transcode),
+        handler=build_handler(
+            store, producer, sessions_factory, transcode_fn=slow_transcode, hls_fn=fake_hls
+        ),
         policy=RetryPolicy(REGISTRY.retry_tiers),
         poll_timeout=0.2,  # frequent heartbeat, well under the 6s ceiling
     )
@@ -283,6 +311,7 @@ def test_a_redelivered_message_produces_one_object_and_one_db_row(
     insert_video_row(sessions_factory, video_id)
     target_key = f"users/{OWNER}/videos/{video_id}/renditions/360p.mp4"
     invocations: list[str] = []
+    hls_invocations = 0
 
     def fake_transcode(
         source: str, destination: str, rendition: str, *, timeout_s: float
@@ -292,6 +321,11 @@ def test_a_redelivered_message_produces_one_object_and_one_db_row(
             handle.write(b"\x01" * 777)
         return TranscodeResult(output_path=destination)
 
+    def counting_hls(source: str, output_dir: str) -> HlsResult:
+        nonlocal hls_invocations
+        hls_invocations += 1
+        return fake_hls(source, output_dir)
+
     store.client.put_object(
         Bucket=store.bucket,
         Key=f"users/{OWNER}/videos/{video_id}/source.mp4",
@@ -299,18 +333,26 @@ def test_a_redelivered_message_produces_one_object_and_one_db_row(
     )
 
     producer = EventProducer(service="test")
-    handler = build_handler(store, producer, sessions_factory, transcode_fn=fake_transcode)
+    handler = build_handler(
+        store, producer, sessions_factory, transcode_fn=fake_transcode, hls_fn=counting_hls
+    )
     event = a_request(video_id, target_key)
 
     class _View:
         headers: list[tuple[str, bytes]] = []
 
     handler(event, _View())  # first delivery — does the real work
-    handler(event, _View())  # redelivery — must be a no-op encode
+
+    assert store.exists(hls_playlist_key(OWNER, video_id, "360p")), (
+        "the HLS playlist must exist after the first delivery"
+    )
+
+    handler(event, _View())  # redelivery — must be a no-op encode and remux
 
     producer.flush()
 
     assert invocations == ["360p"], "the second delivery re-ran the transcode"
+    assert hls_invocations == 1, "the second delivery re-ran the HLS remux"
 
     with sessions_factory() as session:
         rows = (
@@ -324,6 +366,54 @@ def test_a_redelivered_message_produces_one_object_and_one_db_row(
         )
     assert len(rows) == 1, f"expected exactly one DB row, found {len(rows)}"
     assert rows[0].attempt == 1, "the idempotent-skip path must not touch the claim"
+
+
+def test_an_mp4_with_no_playlist_is_remuxed_without_reclaiming_or_re_encoding(
+    environment: None, sessions_factory: Any
+) -> None:
+    """The gap a two-promote idempotency check has to cover: an attempt that
+    died between the MP4 promote and the playlist promote left the rendition
+    genuinely done but the playlist missing. The next delivery must finish
+    the job from the existing MP4 — no re-claim (the RenditionRow already
+    holds one), no re-download of the source, no re-encode."""
+    store = object_store()
+    video_id = uuid.uuid4()
+    insert_video_row(sessions_factory, video_id)
+    target_key = f"users/{OWNER}/videos/{video_id}/renditions/360p.mp4"
+    transcode_invocations: list[str] = []
+
+    def fake_transcode(
+        source: str, destination: str, rendition: str, *, timeout_s: float
+    ) -> TranscodeResult:
+        transcode_invocations.append(rendition)
+        with open(destination, "wb") as handle:
+            handle.write(b"\x02" * 512)
+        return TranscodeResult(output_path=destination)
+
+    store.client.put_object(
+        Bucket=store.bucket,
+        Key=f"users/{OWNER}/videos/{video_id}/source.mp4",
+        Body=b"\x00" * 256,
+    )
+    # Simulates the MP4 promote having already succeeded in a prior, aborted
+    # attempt — no RenditionRow claim exists for it here, matching a real
+    # crash-mid-handler: the claim and the MP4 both survive independently of
+    # whether the HLS step ever ran.
+    store.client.put_object(Bucket=store.bucket, Key=target_key, Body=b"\x02" * 512)
+
+    producer = EventProducer(service="test")
+    handler = build_handler(
+        store, producer, sessions_factory, transcode_fn=fake_transcode, hls_fn=fake_hls
+    )
+
+    class _View:
+        headers: list[tuple[str, bytes]] = []
+
+    handler(a_request(video_id, target_key), _View())
+    producer.flush()
+
+    assert transcode_invocations == [], "an already-promoted MP4 must never be re-encoded"
+    assert store.exists(hls_playlist_key(OWNER, video_id, "360p"))
 
 
 # ----------------------------------------------------------------------- failure
@@ -361,7 +451,9 @@ def test_a_terminal_failure_lands_in_the_dlq_with_reason_and_pipeline_failed(
         source_topic=RENDITION_REQUESTED,
         consumer=consumer,
         producer=producer,
-        handler=build_handler(store, producer, sessions_factory, transcode_fn=broken_transcode),
+        handler=build_handler(
+            store, producer, sessions_factory, transcode_fn=broken_transcode, hls_fn=fake_hls
+        ),
         policy=RetryPolicy(REGISTRY.retry_tiers),
         poll_timeout=0.5,
     )

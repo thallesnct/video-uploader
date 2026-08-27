@@ -113,6 +113,10 @@ class RenditionCompleted(Event):
     object_key: str
     size_bytes: int
     transcode_seconds: float
+    # Phase 9 addition: optional per ADR-0003. worker_package (ADR-0013)
+    # builds master.m3u8 from these rather than re-deriving the key or
+    # hitting the DB for it.
+    playlist_key: str | None = None
 
 
 class ThumbnailCompleted(Event):
