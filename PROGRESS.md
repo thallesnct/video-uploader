@@ -442,15 +442,86 @@ frontend must call `eventSource.close()` itself on a terminal event — recorded
 as a cross-phase contract in ADR-0008's follow-on, not something Phase 7 can
 enforce from the server.
 
-## Phase 8 — Frontend `[ ]`
+## Phase 8 — Frontend `[x]`
 
-- [ ] Upload page: direct-to-MinIO PUT with progress, then `/complete`
-- [ ] Video detail: rendition grid, placeholders from the probed ladder,
+- [x] Upload page: direct-to-MinIO PUT with progress, then `/complete`
+- [x] Video detail: rendition grid, placeholders from the probed ladder,
       each tile flipping to ready as its SSE event lands
-- [ ] Reconnect/backoff on SSE drop; empty and error states
+- [x] Reconnect/backoff on SSE drop; empty and error states
 
-**Gate:** `make e2e ARGS="-k upload_flow"` — Playwright uploads the fixture and asserts
-each rendition tile turns ready **without a page reload**.
+**Gate:** `make e2e` — Playwright uploads the fixture and asserts each rendition
+tile turns ready **without a page reload**. `ARGS` passes through to
+`playwright test` itself (e.g. `ARGS="--grep upload-flow"`), not pytest's `-k`.
+
+```
+Running 1 test using 1 worker
+  ✓  1 upload-flow.spec.ts:8:1 › upload flow: each rendition tile turns ready without a page reload (8.1s)
+  1 passed (12.3s)
+```
+
+React 19 + TypeScript + Vite (ADR-0014); TanStack Query for server state
+*and* mutations (`useMutation`, not a hand-rolled async function + `useState`
+for every API write); TanStack Router for the two routes (`/`,
+`/videos/$videoId`) — added as an ADR-0014 follow-on, same family as
+TanStack Query already justified there. CSS Modules per component,
+driven by CSS custom-property tokens, never a shared global stylesheet.
+`backend/` and `frontend/` are now separate top-level trees (own manifests,
+own lockfiles); `tests/e2e/` stays at the true root since it drives a browser
+against both sides together.
+
+**Discovered mid-phase, resolved before this phase closed:**
+
+1. **The repo needed a real backend/frontend split before frontend/ could
+   land cleanly.** `libs/`, `services/`, `migrations/`, `tests/{unit,
+   integration,ffmpeg}/`, `pyproject.toml`, `uv.lock`, `alembic.ini` moved
+   under `backend/`; `docker-compose.yml`'s six build blocks point at
+   `context: ./backend`; the Makefile's Python targets use
+   `uv run --directory backend` so every relative path already in
+   `pyproject.toml` (testpaths, per-file-ignores, pythonpath) keeps
+   resolving unchanged. `infra/` stays at the true root (runs before the
+   backend's venv exists) but lints against the same rules via a new
+   `infra/ruff.toml` that extends `backend/pyproject.toml`. Caught in the
+   process: `.gitignore`'s bare `*.ts` rule (meant for HLS segments) would
+   have silently swallowed every TypeScript source file — scoped to `tmp/`.
+2. **`api`/`worker-probe`/`worker-transcode`/`projector` had no profile
+   tag**, so a bare `make up` started them immediately, racing `bootstrap`
+   (topic creation) — `UnknownTopicOrPartitionError` every time, a silent
+   trap for anyone running the real stack rather than the test suites.
+   Tagged `profiles: ["app"]`; `make up` now only brings up the infra tier,
+   matching what its own docstring always claimed. `make e2e` starts the
+   app tier explicitly, after `bootstrap` and a new `make migrate` target.
+3. **Presigned URLs and MinIO's CORS allow-list both assumed a host-run
+   browser** (`S3_PUBLIC_ENDPOINT=http://localhost:9000`,
+   `MINIO_API_CORS_ALLOW_ORIGIN` listing only `localhost` origins). Broke
+   immediately for `make e2e`, whose browser runs *inside* the compose
+   network (Playwright's own container) — `localhost` there means that
+   container, not the host. `S3_PUBLIC_ENDPOINT` is now overridable
+   (`make e2e` sets it to `http://minio:9000`); the CORS list gained
+   `http://frontend:5173`.
+4. **`vite preview` rejects any `Host` header not on an allowlist**
+   (DNS-rebinding protection) — same root cause as (3), the e2e browser
+   reaches the frontend container by compose service name. Added
+   `preview.allowedHosts`.
+5. **No Chromium build exists for every host OS/arch combination** — hit
+   directly ("Playwright does not support chromium on mac13-arm64").
+   Playwright now runs inside Microsoft's own container image, joined to
+   the compose network, rather than on the host — which is also what CI
+   would do, so the local and CI paths are identical rather than diverging
+   the first time someone's laptop doesn't match Playwright's support matrix.
+6. **A Kafka consumer that session-times-out during a resource-contended
+   cold start did not resume on its own.** Found running the real e2e gate
+   repeatedly on a 4-CPU dev machine: the projector logged
+   "revoking assignment and rejoining group" once, then produced zero
+   further log lines while two videos sat stuck at `status=uploaded`
+   indefinitely — confirmed via direct DB inspection, not inferred. A plain
+   `docker compose restart projector` (no rebuild) caught both videos up
+   instantly, which points at broker-side unavailability under sustained
+   load rather than a `StageWorker` defect: `poll()` is what surfaces
+   librdkafka's own rejoin, and it recovered cleanly the moment it got a
+   stable window. **Not root-caused further here** — flagged for a closer
+   look before Phase 14 load testing, which will produce exactly this kind
+   of sustained pressure for real, not just as an artifact of rebuilding
+   five images back to back on a laptop.
 
 ## Phase 9 — Thumbnails, HLS & completion join `[ ]`
 Refs: ADR-0013
@@ -584,6 +655,12 @@ measuring here is not "requests per second" — it is where the pipeline bends.
 - [ ] Scenario: noisy neighbour — one tenant floods; assert quotas keep the
       others' end-to-end latency within budget
 - [ ] Record the numbers as SLO baselines in ADR-0015, replacing its placeholders
+- [ ] Follow up on Phase 8 finding #6: a projector whose Kafka consumer group
+      session times out under sustained load did not resume on its own until
+      manually restarted. Not root-caused there — this phase's sustained
+      pressure (not just a laptop rebuilding five images back to back) is
+      the right place to reproduce it deliberately and confirm whether it's
+      broker-side unavailability or a real `StageWorker` rebalance defect.
 
 **Gate:** a documented run of all four scenarios with results committed, and the
 bottleneck of each named.
