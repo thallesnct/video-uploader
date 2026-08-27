@@ -12,7 +12,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
@@ -88,6 +88,51 @@ class VideoRepository:
             )
         )
         return int(result.scalar_one())
+
+    async def expire_stale_awaiting_uploads(self, owner_id: str, older_than: timedelta) -> int:
+        """Fail an upload whose presigned PUT window has closed (ADR-0006
+        follow-on).
+
+        `older_than` is the presign's own expiry duration, not a separate
+        guess: once it has passed, the URL is dead and the row can *never*
+        be completed, so this is a fact, not a heuristic. Run opportunistically
+        on the read/write paths that care (create, list) rather than by a
+        background sweeper — no new service to deploy, and the check rides
+        along with a query that was happening anyway. `awaiting_upload` never
+        enters the Kafka pipeline (VideoUploaded is only published from
+        `/complete`), so writing `failed` here directly does not collide with
+        the projector's ownership of state columns post-upload (ADR-0007).
+        """
+        result = await self._session.execute(
+            update(VideoRow)
+            .where(
+                VideoRow.owner_id == owner_id,
+                VideoRow.status == VideoState.AWAITING_UPLOAD.value,
+                VideoRow.created_at < datetime.now(UTC) - older_than,
+            )
+            .values(status=VideoState.FAILED.value, failure_reason="upload window expired")
+            .returning(VideoRow.id)
+        )
+        return len(result.scalars().all())
+
+    async def delete_awaiting_upload(self, owner_id: str, video_id: UUID) -> bool:
+        """Cancel an upload that never completed (ADR-0006 follow-on) — the
+        only state this is allowed to touch. A claim, not read-then-delete:
+        a `/complete` racing this call must not leave an inconsistent result
+        (ADR-0005). Safe as a hard delete: nothing downstream can reference
+        this video_id yet, since VideoUploaded is never published before
+        `/complete` succeeds, so no rendition or event row can exist for it.
+        """
+        result = await self._session.execute(
+            delete(VideoRow)
+            .where(
+                VideoRow.id == video_id,
+                VideoRow.owner_id == owner_id,
+                VideoRow.status == VideoState.AWAITING_UPLOAD.value,
+            )
+            .returning(VideoRow.id)
+        )
+        return result.scalar_one_or_none() is not None
 
     async def claim_upload_complete(self, owner_id: str, video_id: UUID) -> bool:
         """Move awaiting_upload -> uploaded exactly once.

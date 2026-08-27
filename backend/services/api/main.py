@@ -12,6 +12,7 @@ import asyncio
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import timedelta
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response, status
@@ -204,6 +205,14 @@ async def create_video(request: CreateVideoRequest, caller: Caller) -> CreateVid
 
     async with session_scope(app.state.sessions) as session:
         repository = VideoRepository(session)
+        # A row whose presign window has closed can never be completed —
+        # free its quota slot before counting, so a caller blocked only by
+        # their own dead uploads is unblocked by this same request rather
+        # than needing to wait for one to be individually cancelled
+        # (ADR-0006 follow-on).
+        await repository.expire_stale_awaiting_uploads(
+            caller.owner_id, older_than=timedelta(seconds=app.state.store.presign_put_expiry_s)
+        )
         in_flight = await repository.count_in_flight(caller.owner_id)
         if in_flight >= quotas.max_videos_in_flight:
             # 429 rather than 403: this is a rate problem, not a permission one,
@@ -300,10 +309,57 @@ async def complete_upload(video_id: uuid.UUID, caller: Caller) -> VideoResponse:
 @app.get("/videos")
 async def list_videos(caller: Caller, limit: int = 50, offset: int = 0) -> list[VideoResponse]:
     async with session_scope(app.state.sessions) as session:
-        rows = await VideoRepository(session).list_for_owner(
+        repository = VideoRepository(session)
+        await repository.expire_stale_awaiting_uploads(
+            caller.owner_id, older_than=timedelta(seconds=app.state.store.presign_put_expiry_s)
+        )
+        rows = await repository.list_for_owner(
             caller.owner_id, limit=min(limit, 200), offset=offset
         )
     return [to_response(row) for row in rows]
+
+
+@app.delete("/videos/{video_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def cancel_video(video_id: uuid.UUID, caller: Caller) -> Response:
+    """Cancel an upload that never completed (ADR-0006 follow-on).
+
+    Scoped to `awaiting_upload` only: once `/complete` has published
+    `video.uploaded`, a worker may already be acting on it, and a DB-only
+    flip to some cancelled state cannot stop work already in flight —
+    that needs real cooperation from the workers, which this does not
+    attempt. Cancelling before that point is safe because nothing
+    downstream has claimed the video_id yet.
+    """
+    async with session_scope(app.state.sessions) as session:
+        repository = VideoRepository(session)
+        row = await repository.get(caller.owner_id, video_id)
+        if row is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "video not found")
+        if row.status != VideoState.AWAITING_UPLOAD.value:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"cannot cancel a video in status {row.status!r}; only an "
+                "upload that has not been completed can be cancelled",
+            )
+        # A claim, not a trust in the read above: /complete racing this
+        # call must not leave both an event published and the row gone.
+        deleted = await repository.delete_awaiting_upload(caller.owner_id, video_id)
+        object_key = row.object_key
+
+    if not deleted:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "upload completed concurrently; cannot cancel"
+        )
+
+    # Best-effort: the browser may have actually PUT the bytes even though
+    # /complete was never called (deleting a nonexistent key is a no-op,
+    # not an error, under S3-compatible semantics).
+    await asyncio.to_thread(
+        app.state.store.client.delete_object,
+        Bucket=app.state.store.bucket,
+        Key=object_key,
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @app.get("/videos/{video_id}")

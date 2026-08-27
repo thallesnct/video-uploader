@@ -235,6 +235,110 @@ def test_too_many_videos_in_flight_is_refused(client: Any, auth: Any) -> None:
     assert refused.status_code == 429
 
 
+# ------------------------------------------------------- expiry / cancellation
+
+
+def _backdate_created_at(video_id: str, seconds_ago: float) -> None:
+    """Force a row's created_at into the past — the presign window defaults
+    to 6h, too long to just wait out in a test."""
+    from pipeline.db import create_sync_engine
+    from sqlalchemy import text
+
+    engine = create_sync_engine()
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "UPDATE videos SET created_at = now() - make_interval(secs => :s) "
+                    "WHERE id = :id"
+                ),
+                {"s": seconds_ago, "id": video_id},
+            )
+    finally:
+        engine.dispose()
+
+
+def test_a_stale_awaiting_upload_is_expired_and_freed_from_quota(client: Any, auth: Any) -> None:
+    """A presign window that has closed can never be completed — the row
+    must not occupy quota forever (ADR-0006 follow-on)."""
+    from pipeline.settings import quota_settings, s3_settings
+
+    subject = f"user|{uuid.uuid4()}"
+    limit = quota_settings().max_videos_in_flight
+    created_ids = [
+        client.post("/videos", json=A_VIDEO, headers=auth(subject)).json()["video_id"]
+        for _ in range(limit)
+    ]
+    assert client.post("/videos", json=A_VIDEO, headers=auth(subject)).status_code == 429
+
+    expiry = s3_settings().presign_put_expiry_s
+    _backdate_created_at(created_ids[0], expiry + 60)
+
+    # The same request that would have been refused now succeeds: the stale
+    # row expires as part of this very call, before quota is even counted.
+    response = client.post("/videos", json=A_VIDEO, headers=auth(subject))
+    assert response.status_code == 201, response.text
+
+    expired = client.get(f"/videos/{created_ids[0]}", headers=auth(subject)).json()
+    assert expired["status"] == "failed"
+    assert expired["failure_reason"] == "upload window expired"
+
+
+def test_cancelling_an_awaiting_upload_video_removes_it(client: Any, auth: Any) -> None:
+    headers = auth(ALICE)
+    created = client.post("/videos", json=A_VIDEO, headers=headers).json()
+
+    response = client.delete(f"/videos/{created['video_id']}", headers=headers)
+
+    assert response.status_code == 204
+    assert client.get(f"/videos/{created['video_id']}", headers=headers).status_code == 404
+
+
+def test_cancelling_frees_the_quota_slot_immediately(client: Any, auth: Any) -> None:
+    from pipeline.settings import quota_settings
+
+    subject = f"user|{uuid.uuid4()}"
+    limit = quota_settings().max_videos_in_flight
+    ids = [
+        client.post("/videos", json=A_VIDEO, headers=auth(subject)).json()["video_id"]
+        for _ in range(limit)
+    ]
+    assert client.post("/videos", json=A_VIDEO, headers=auth(subject)).status_code == 429
+
+    assert client.delete(f"/videos/{ids[0]}", headers=auth(subject)).status_code == 204
+
+    assert client.post("/videos", json=A_VIDEO, headers=auth(subject)).status_code == 201
+
+
+def test_cancelling_an_uploaded_video_is_rejected(client: Any, auth: Any) -> None:
+    """Once /complete has run, a worker may already be acting on it — a
+    DB-only cancel cannot stop that, so this scope is a hard boundary."""
+    headers = auth(ALICE)
+    created = upload(client, headers)
+    completed = client.post(f"/videos/{created['video_id']}/complete", headers=headers)
+    assert completed.status_code == 200
+
+    response = client.delete(f"/videos/{created['video_id']}", headers=headers)
+
+    assert response.status_code == 409
+    assert client.get(f"/videos/{created['video_id']}", headers=headers).status_code == 200
+
+
+def test_cancelling_someone_elses_video_is_not_found(client: Any, auth: Any) -> None:
+    alices = client.post("/videos", json=A_VIDEO, headers=auth(ALICE)).json()
+
+    response = client.delete(f"/videos/{alices['video_id']}", headers=auth(BOB))
+
+    assert response.status_code == 404
+    assert client.get(f"/videos/{alices['video_id']}", headers=auth(ALICE)).status_code == 200
+
+
+def test_cancelling_an_unknown_video_is_not_found(client: Any, auth: Any) -> None:
+    response = client.delete(f"/videos/{uuid.uuid4()}", headers=auth(ALICE))
+
+    assert response.status_code == 404
+
+
 def test_an_unsupported_container_is_refused_at_the_door(client: Any, auth: Any) -> None:
     response = client.post(
         "/videos",
