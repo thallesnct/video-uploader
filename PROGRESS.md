@@ -210,6 +210,29 @@ pinned `requirements-dev.txt` and installs with `--no-deps`. The project is not
 installed at all — `pytest`'s `pythonpath` imports it from the source tree,
 removing the build-backend step that hung the same way.
 
+### Follow-on: expiring and cancelling a stuck `awaiting_upload` (2026-08-27)
+
+Hit directly using the real Phase 8 frontend: a presigned URL signed for a
+host the browser couldn't resolve left a `video` row wedged at
+`awaiting_upload` forever, silently occupying one of `max_videos_in_flight`'s
+10 slots with no way to see or clear it. This ADR's own Consequences section
+had already named the risk ("an upload that never calls `/complete` leaves an
+orphan") but only ever specified the object-store half of the fix, never the
+Postgres half. Added both, scoped to `awaiting_upload` only — see ADR-0006's
+follow-on for the full reasoning: `expire_stale_awaiting_uploads` (keyed off
+the presign's own expiry, not an invented second TTL) runs opportunistically
+on `POST /videos` and `GET /videos`; `DELETE /videos/{id}` cancels one
+manually, as a claim rather than read-then-delete. Cancelling anything past
+`awaiting_upload` is deliberately out of scope — a worker may already be
+mid-job by then, and stopping that needs real cooperation from the workers,
+not a DB flag.
+
+**Gate:** `make integration -k test_upload` — 26 passed (20 original + 6 new:
+one expiry test backdating `created_at` past the presign window, five
+cancellation cases covering the happy path, quota release, the past-
+`awaiting_upload` 409, and both isolation cases). Full suite: `make
+integration` — 50 passed.
+
 ## Phase 4 — Probe stage `[x]`
 Refs: ADR-0011, ADR-0012, ADR-0013, ADR-0016
 
