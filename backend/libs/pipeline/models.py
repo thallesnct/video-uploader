@@ -53,6 +53,14 @@ class VideoRow(Base):
     # set (ADR-0013), so it is data, not a constant.
     expected_renditions: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
 
+    # Filled by the thumbnail stage (Phase 9); unknown until then.
+    poster_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    sprite_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    vtt_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    # Filled by the packager (Phase 9, ADR-0013). NULL means "not packaged
+    # yet" — `status` already distinguishes that from "packaging in progress".
+    master_playlist_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+
     failure_reason: Mapped[str | None] = mapped_column(String(1024), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
@@ -98,6 +106,9 @@ class RenditionRow(Base):
     # --- STATE: projector-owned (Phase 6) ---
     status: Mapped[str | None] = mapped_column(String(32), nullable=True)
     object_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    # This rendition's own HLS playlist (Phase 9), distinct from object_key's
+    # single MP4 — the master playlist the packager writes references these.
+    playlist_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     failure_reason: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

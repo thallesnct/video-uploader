@@ -165,6 +165,21 @@ class VideoStatusChanged(Event):
     rendition_object_key: str | None = None
     rendition_size_bytes: int | None = None
 
+    # --- Phase 9 additions: same additive rule (ADR-0003), no version bump. ---
+
+    # Populated by the thumbnail worker on a video-level status change.
+    poster_key: str | None = None
+    sprite_key: str | None = None
+    vtt_key: str | None = None
+
+    # Populated by the transcode worker; only ever set together with
+    # `rendition`, mirroring rendition_object_key — this rendition's own HLS
+    # playlist, not the master the packager writes.
+    rendition_playlist_key: str | None = None
+
+    # Populated by the packager on the video-level transition to `completed`.
+    master_playlist_key: str | None = None
+
 
 EVENT_TYPES: dict[str, type[Event]] = {
     cls.model_fields["type"].default: cls

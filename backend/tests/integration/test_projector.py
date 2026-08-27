@@ -118,6 +118,79 @@ def test_projector_upserts_a_completed_rendition(sessions_factory: Any) -> None:
         assert rendition.claimed_at is None
 
 
+def test_projector_writes_thumbnail_and_master_playlist_keys(sessions_factory: Any) -> None:
+    """Phase 9: poster/sprite/vtt and master_playlist_key ride video.status
+    exactly like duration_s/width did in Phase 6 — additive fields, same
+    _apply_status loop, no new event type (ADR-0003)."""
+    video_id = uuid.uuid4()
+    insert_video_row(sessions_factory, video_id)
+    handler = build_handler(sessions_factory)
+    prefix = f"users/{OWNER}/videos/{video_id}"
+
+    handler(
+        VideoStatusChanged(
+            video_id=video_id,
+            owner_id=OWNER,
+            producer="thumbnail",
+            state=VideoState.TRANSCODING,
+            poster_key=f"{prefix}/thumbs/poster.jpg",
+            sprite_key=f"{prefix}/thumbs/sprite.jpg",
+            vtt_key=f"{prefix}/thumbs/sprite.vtt",
+        ),
+        _View(),
+    )
+    handler(
+        VideoStatusChanged(
+            video_id=video_id,
+            owner_id=OWNER,
+            producer="package",
+            state=VideoState.COMPLETED,
+            master_playlist_key=f"{prefix}/hls/master.m3u8",
+        ),
+        _View(),
+    )
+
+    with sync_session_scope(sessions_factory) as session:
+        row = session.execute(select(VideoRow).where(VideoRow.id == video_id)).scalar_one()
+        assert row.poster_key == f"{prefix}/thumbs/poster.jpg"
+        assert row.sprite_key == f"{prefix}/thumbs/sprite.jpg"
+        assert row.vtt_key == f"{prefix}/thumbs/sprite.vtt"
+        assert row.master_playlist_key == f"{prefix}/hls/master.m3u8"
+        assert row.status == VideoState.COMPLETED.value
+
+
+def test_projector_writes_a_rendition_playlist_key(sessions_factory: Any) -> None:
+    """rendition_playlist_key rides the same rendition-scoped upsert as
+    rendition_object_key — set together, same event, same row."""
+    video_id = uuid.uuid4()
+    insert_video_row(sessions_factory, video_id)
+    handler = build_handler(sessions_factory)
+    target_key = f"users/{OWNER}/videos/{video_id}/renditions/360p.mp4"
+    playlist_key = f"users/{OWNER}/videos/{video_id}/hls/360p/playlist.m3u8"
+
+    handler(
+        VideoStatusChanged(
+            video_id=video_id,
+            owner_id=OWNER,
+            producer="transcode",
+            state=VideoState.TRANSCODING,
+            rendition="360p",
+            rendition_object_key=target_key,
+            rendition_size_bytes=4096,
+            rendition_playlist_key=playlist_key,
+        ),
+        _View(),
+    )
+
+    with sync_session_scope(sessions_factory) as session:
+        rendition = session.execute(
+            select(RenditionRow).where(
+                RenditionRow.video_id == video_id, RenditionRow.rendition == "360p"
+            )
+        ).scalar_one()
+        assert rendition.playlist_key == playlist_key
+
+
 def test_projector_applies_a_terminal_pipeline_failure(sessions_factory: Any) -> None:
     video_id = uuid.uuid4()
     insert_video_row(sessions_factory, video_id)

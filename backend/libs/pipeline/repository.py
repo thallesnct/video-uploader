@@ -251,7 +251,16 @@ class ProjectorRepository:
 
     def _apply_status(self, event: VideoStatusChanged) -> None:
         values: dict[str, object] = {"status": event.state.value}
-        for field in ("duration_s", "width", "height", "expected_renditions"):
+        for field in (
+            "duration_s",
+            "width",
+            "height",
+            "expected_renditions",
+            "poster_key",
+            "sprite_key",
+            "vtt_key",
+            "master_playlist_key",
+        ):
             value = getattr(event, field)
             if value is not None:
                 values[field] = value
@@ -266,24 +275,29 @@ class ProjectorRepository:
         # event with no object key yet has no STATE data worth writing.
         if event.rendition is not None and event.rendition_object_key is not None:
             now = datetime.now(UTC)
+            row_values: dict[str, object] = {
+                "id": uuid.uuid4(),
+                "video_id": event.video_id,
+                "owner_id": event.owner_id,
+                "rendition": event.rendition,
+                "status": VideoState.COMPLETED.value,
+                "object_key": event.rendition_object_key,
+                "completed_at": now,
+            }
+            update_values: dict[str, object] = {
+                "status": VideoState.COMPLETED.value,
+                "object_key": event.rendition_object_key,
+                "completed_at": now,
+            }
+            if event.rendition_playlist_key is not None:
+                row_values["playlist_key"] = event.rendition_playlist_key
+                update_values["playlist_key"] = event.rendition_playlist_key
             statement = (
                 insert(RenditionRow)
-                .values(
-                    id=uuid.uuid4(),
-                    video_id=event.video_id,
-                    owner_id=event.owner_id,
-                    rendition=event.rendition,
-                    status=VideoState.COMPLETED.value,
-                    object_key=event.rendition_object_key,
-                    completed_at=now,
-                )
+                .values(**row_values)
                 .on_conflict_do_update(
                     constraint="uq_renditions_video_rendition",
-                    set_={
-                        "status": VideoState.COMPLETED.value,
-                        "object_key": event.rendition_object_key,
-                        "completed_at": now,
-                    },
+                    set_=update_values,
                 )
             )
             self._session.execute(statement)
