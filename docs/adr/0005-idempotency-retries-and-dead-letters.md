@@ -165,3 +165,60 @@ exists to prevent.
   see its docstring.
 - No change for any existing `retries: true` topic or stage; every current
   worker's retry/DLQ behavior is unchanged, verified by the existing test suite.
+
+## Follow-on: `pipeline.failed` self-amplification (2026-08-27)
+
+Discovered running the real Phase 8 compose stack: `pipeline.failed`'s log-end
+offset climbed continuously (237 → 370+ observed) with no new videos being
+processed. `docker logs vp-projector` showed a nonstop stream of the same
+`ForeignKeyViolation`/`TerminalError` for a handful of stale `video_id`s left
+over from earlier ad-hoc testing — the projector was entirely occupied
+reprocessing garbage instead of making progress.
+
+**Root cause.** `_route_failure` calls `_emit_pipeline_failed` on every
+dead-lettered message, to attach video/owner context to a `pipeline.failed`
+event for the read model (`ProjectorRepository._apply_failure`) and for
+`notify` (Phase 11). The projector subscribes to *both* `video.status` and
+`pipeline.failed` (`services/projector/main.py`) so that a `pipeline.failed`
+event itself gets a `failure_reason` recorded against the video. That
+symmetry is also the bug: when the failing `video_id` has no row in `videos`
+at all, `ProjectorRepository.apply()` raises `IntegrityError` regardless of
+which of the two topics the message came from — the handler reclassifies it
+to `TerminalError` either way — and the message dead-letters. But
+dead-lettering calls `_emit_pipeline_failed`, which publishes a *new*
+`pipeline.failed` event referencing the same `video_id`. The projector then
+consumes that new event, hits the identical `IntegrityError`, dead-letters
+it, and emits another. Nothing about the failure is transient or
+video-content-dependent, so the loop has no natural stopping condition — it
+is bounded only by how fast the projector can crash-loop through the same
+constraint violation, which is fast.
+
+This is a general hazard, not specific to this one FK violation: **any
+worker that both consumes `pipeline.failed` and can fail deterministically
+on a `pipeline.failed` message will amplify forever**, because the emit
+feeds a topic the same worker reads from.
+
+**Fix.** `StageWorker` now records the topics it was told to `subscribe()`
+to, and `_emit_pipeline_failed` skips emitting — logging and dead-lettering
+silently instead — whenever `PIPELINE_FAILED` is among them. This covers
+both paths (a bad `video.status` *or* a bad `pipeline.failed` message
+reaching the projector) with one rule, keyed on "does this worker read the
+topic I'm about to publish to," not on which topic the failing message
+happened to arrive from. Silent dead-lettering is safe specifically for
+`pipeline.failed`: it already sits at the end of the failure-notification
+chain, and nothing downstream depends on it re-emitting itself. Stages that
+don't consume `pipeline.failed` (`worker-probe`, `worker-transcode`) are
+unaffected — their emit behavior is unchanged.
+
+Considered and rejected: keying the guard on the *failing message's* topic
+(`view.topic == PIPELINE_FAILED`) instead of the worker's subscription set.
+Rejected because it only closes half the loop — a bad `video.status` message
+would still dead-letter into a `pipeline.failed` event that the same
+worker's `pipeline.failed` subscription would then fail on identically,
+reopening the loop one hop later.
+
+Not addressed here: the backlog of already-amplified messages sitting on the
+real `pipeline.failed` topic in the dev environment. Cheapest path is
+recreating the dev stack's Kafka/Postgres volumes rather than a surgical
+offset reset, since the group must be inactive for `--reset-offsets` to work
+at all and the backlog is worthless garbage regardless.
