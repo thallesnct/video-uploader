@@ -484,10 +484,30 @@ transcode → package; the lag panel returns non-empty series.
 - [ ] `worker_notify`: webhook on `video.completed`, own consumer group, own retries
 - [ ] Failure surfacing: DLQ'd renditions show as failed in the UI with a reason
 - [ ] Manual replay endpoint/CLI: DLQ → source topic
+- [ ] **Retry-tier pump** — a service that drains each `<topic>.retry.<tier>`
+      once its delay elapses and republishes to `<topic>`. ADR-0002 and
+      ADR-0009 named this component from the start ("retry pump" appears in
+      both), but no phase ever scheduled building it, and none of the
+      retry-routing tests (Phase 4 onward) exercise redelivery *from* a retry
+      topic — only that a failed message is correctly *produced to* one.
+      Discovered running Phase 8's real compose stack for the first time: a
+      transient failure has been equivalent to a **silent, permanent drop**
+      since Phase 5, contradicting the DoD in AGENTS.md ("failures route to
+      retry or DLQ ... never a silent drop"). Not fixed here — it's a new
+      service, out of scope for a frontend phase — but it must land before
+      this system is called reliable, and ideally before Phase 14 load
+      testing, which will generate transient failures for real. Concretely
+      demonstrated in this same session: wiring worker-probe into
+      docker-compose.yml hit a tmpfs-permission bug (see that commit) that
+      made the first message fail transiently. With no pump to redeliver it,
+      that message would have been stranded on `video.probe.retry.10s`
+      forever rather than self-healing once the compose fix landed.
 
 **Gate:** `make e2e ARGS="-k failure"` — a corrupt upload shows a failed state in the UI
 with a reason, the webhook fires for a successful one, and a DLQ replay drives the
-video to completion.
+video to completion. The retry-pump item additionally needs its own redelivery
+test: produce a TRANSIENT failure, assert the message reaches `<topic>` again
+after (not before) its tier's delay, with no earlier delivery.
 
 ## Phase 12 — Production hardening `[ ]`
 Refs: ADR-0015
