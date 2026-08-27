@@ -85,3 +85,31 @@ Downloads and playback also use presigned GETs, so the API is never a media prox
 - Because the client writes directly, **the object key is the trust boundary**:
   the presign must pin the exact key, and `/complete` must verify rather than
   trust the client's claim.
+
+## Follow-on decision: presigning against a different host than the internal client (2026-08-27)
+
+Discovered building Phase 8's upload page — the first thing to actually run a
+browser against the containerized stack. `ObjectStore` used one `S3Settings`
+endpoint for both the boto3 client's own calls (`head`, `promote`, `download`
+— all made from inside a container, where `http://minio:9000` resolves) and
+for signing presigned URLs. A URL's signature covers its host, so a browser
+handed a presign signed against `http://minio:9000` cannot use it at all — that
+name resolves nowhere outside the compose network. This was invisible until
+now because every prior test ran on the host, where `.env`'s `S3_ENDPOINT=
+http://localhost:9000` happens to be correct for both purposes at once.
+
+Fixed with a second, optional setting: `S3Settings.public_endpoint`, defaulting
+to `endpoint` (preserving today's host-based behavior unchanged). `ObjectStore`
+gets a second lazily-constructed boto3 client — same credentials, region, and
+signature version, only the `endpoint_url` differs — used exclusively by
+`presign_put`/`presign_get`. The compose `api` service sets
+`S3_PUBLIC_ENDPOINT=http://localhost:${MINIO_API_PORT}` alongside its internal
+`S3_ENDPOINT=http://minio:9000`.
+
+### Consequences
+
+- Any future deployment target needs to know its own internal-vs-public S3
+  endpoint split; on real S3 both settings are typically the same public URL,
+  so this only matters for a container-networked MinIO.
+- A test asserting a presigned URL's host must check against `public_endpoint`,
+  not `endpoint`, or it will pass for the wrong reason.

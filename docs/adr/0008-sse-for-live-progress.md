@@ -123,3 +123,41 @@ shape isn't settled and terminal detection here only checks for `failed`. The
 gateway re-checks the video row's `status` column fresh every poll (not the
 event payload) specifically so this extends by widening one comparison in
 Phase 9 rather than by re-deriving terminality from event contents.
+
+## Follow-on decision: token via query param for the SSE route only (2026-08-27)
+
+ADR-0014's frontend stack table already named this: "the token goes in a
+short-lived query param or cookie (EventSource cannot set headers)." Phase 7
+built the SSE route on the same `Caller` dependency as every other endpoint —
+`Authorization: Bearer <token>` only — which a real browser's `EventSource`
+cannot supply, since the constructor takes no headers option. Building the
+frontend in Phase 8 is what surfaces this: every other route stays
+header-only.
+
+`GET /videos/{id}/events` alone gets a second dependency, `sse_principal`:
+`Authorization` header if present (so curl and the existing integration tests
+are unaffected), else an `access_token` query parameter, verified through the
+same `TokenVerifier.verify()` as everything else — no separate trust path, only
+a different place to read the raw token from. No new short-lived-token
+minting is introduced; devauth's existing tokens are reused as-is. A
+dedicated shorter-lived SSE-scoped token is a defensible hardening step but
+is Phase 12's job, not a blocker here — this ADR's original text already
+flagged "short-lived" as the eventual direction, not a Phase 8 requirement.
+
+A query-param token has a real exposure difference from a header: it can end
+up in server access logs, proxy logs, and browser history. Accepted for now
+because it is the same long-lived token already sitting in the frontend's
+memory for every other request; the header path remains available and
+preferred wherever the transport allows it.
+
+### Consequences
+
+- A 401 on this route must be treated as fatal by the client and call
+  `eventSource.close()` — `EventSource` retries on *any* error, including an
+  auth failure, which would otherwise hammer the API with a token that will
+  never become valid. This is the same "browser auto-reconnects past a close
+  the server can't prevent" shape as the terminal-event contract above, and
+  belongs with it in Phase 8's client code.
+- Access logs and any log-scrubbing tooling must treat `access_token` as a
+  secret query parameter, the same as any bearer token would be treated in a
+  header — this is now a query string, not just a header, that needs redacting.
