@@ -61,7 +61,7 @@ def main() -> int:
         f"external listener reachable on localhost:{kafka_port}", port_open("localhost", kafka_port)
     )
 
-    registry = json.loads((ROOT / "libs" / "pipeline" / "topics.json").read_text())
+    registry = json.loads((ROOT / "backend" / "libs" / "pipeline" / "topics.json").read_text())
     code, out = compose(
         "exec", "-T", "kafka", "kafka-topics", "--bootstrap-server", "localhost:9092", "--describe"
     )

@@ -78,7 +78,7 @@ services:
 
   devauth:
     build:
-      context: .
+      context: ./backend
       dockerfile: services/devauth/Dockerfile
     container_name: vp-devauth
     ports:
@@ -91,7 +91,7 @@ services:
 
   migrate:
     build:
-      context: .
+      context: ./backend
       dockerfile: services/api/Dockerfile
     container_name: vp-migrate
     profiles: ["tools"]
@@ -105,7 +105,7 @@ services:
 
   api:
     build:
-      context: .
+      context: ./backend
       dockerfile: services/api/Dockerfile
     container_name: vp-api
     ports:
@@ -152,7 +152,7 @@ services:
 
   worker-probe:
     build:
-      context: .
+      context: ./backend
       dockerfile: services/worker_probe/Dockerfile
       target: runtime
     container_name: vp-worker-probe
@@ -189,7 +189,7 @@ services:
 
   worker-transcode:
     build:
-      context: .
+      context: ./backend
       dockerfile: services/worker_transcode/Dockerfile
       target: runtime
     container_name: vp-worker-transcode
@@ -225,7 +225,7 @@ services:
 
   projector:
     build:
-      context: .
+      context: ./backend
       dockerfile: services/projector/Dockerfile
       target: runtime
     container_name: vp-projector

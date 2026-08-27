@@ -16,7 +16,7 @@ repos:
         # The dev issuer's signing key is committed on purpose so load tests can
         # mint tokens offline (ADR-0016). The filename says what it is; the
         # exclusion is scoped to that exact path and nothing else.
-        exclude: ^services/devauth/dev-only-insecure-signing-key\.pem$
+        exclude: ^backend/services/devauth/dev-only-insecure-signing-key\.pem$
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.6.9
@@ -29,5 +29,5 @@ repos:
     rev: v1.11.2
     hooks:
       - id: mypy
-        files: ^libs/pipeline/
+        files: ^backend/libs/pipeline/
         additional_dependencies: ["pydantic>=2.8"]

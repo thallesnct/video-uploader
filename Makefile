@@ -5,12 +5,17 @@ COMPOSE := docker compose
 # Tests run through uv. Use it from the host when installed (fast inner loop);
 # otherwise fall back to a container so a bare machine with only Docker still
 # works — the constraint AGENTS.md sets for this repo.
+# --directory backend, not --project: uv chdirs the whole invocation there, so
+# every relative path already in pyproject.toml (testpaths, per-file-ignores,
+# pythonpath) resolves exactly as it did before the backend/frontend split —
+# recipes below pass backend-relative paths (tests/unit, libs/pipeline), not
+# repo-root-relative ones.
 UV := $(shell command -v uv 2>/dev/null)
 ifdef UV
-  RUN := uv run --extra dev
+  RUN := uv run --directory backend --extra dev
 else
   RUN := docker run --rm -v "$(CURDIR)":/w -w /w -e UV_CACHE_DIR=/w/.uv-cache \
-         ghcr.io/astral-sh/uv:python3.11-bookworm-slim uv run --extra dev
+         ghcr.io/astral-sh/uv:python3.11-bookworm-slim uv run --directory backend --extra dev
 endif
 DC_OBS  := docker compose -f docker-compose.yml -f docker-compose.obs.yml
 
@@ -68,20 +73,20 @@ unit: ## Fast tests, no I/O, no containers
 # re-resolve ~100 packages sends it backtracking through ancient versions for
 # many minutes; uv.lock is the source of truth (ADR-0014), so we install exactly
 # what it pins.
-HOST_VENV := .venv-host
-requirements-dev.txt: uv.lock pyproject.toml
+HOST_VENV := backend/.venv-host
+backend/requirements-dev.txt: backend/uv.lock backend/pyproject.toml
 	docker run --rm -v "$(CURDIR)":/w -w /w -e UV_CACHE_DIR=/w/.uv-cache \
 	  ghcr.io/astral-sh/uv:python3.11-bookworm-slim \
-	  uv export --all-extras --no-hashes --no-emit-project \
+	  uv export --directory backend --all-extras --no-hashes --no-emit-project \
 	  --format requirements-txt -o requirements-dev.txt
 
-$(HOST_VENV)/bin/pytest: requirements-dev.txt
+$(HOST_VENV)/bin/pytest: backend/requirements-dev.txt
 	python3 -m venv $(HOST_VENV)
 	$(HOST_VENV)/bin/pip install -q -U pip
-	$(HOST_VENV)/bin/pip install -q --no-deps -r requirements-dev.txt
+	$(HOST_VENV)/bin/pip install -q --no-deps -r backend/requirements-dev.txt
 
 ifdef UV
-  RUN_HOST := uv run --extra dev
+  RUN_HOST := uv run --directory backend --extra dev
 else
   RUN_HOST := $(HOST_VENV)/bin/python -m
 endif
@@ -93,17 +98,25 @@ endif
 	$(RUN_HOST) pytest tests/integration $(ARGS)
 
 ffmpeg-tests: ## Run the ffmpeg-dependent tests inside the worker image
-	docker build --target test -f services/worker_probe/Dockerfile \
-	  -t vp-worker-probe:test .
+	docker build --target test -f backend/services/worker_probe/Dockerfile \
+	  -t vp-worker-probe:test backend
 	docker run --rm vp-worker-probe:test pytest tests/ffmpeg -q -p no:cacheprovider $(ARGS)
 
 e2e: ## Full compose + Playwright
 	@echo "not implemented until Phase 8" && exit 1
 
+# infra/ sits outside backend/ on purpose (AGENTS.md: operator tooling that
+# runs before the backend's venv exists) but still wants the same lint rules —
+# infra/ruff.toml extends backend/pyproject.toml's config rather than this
+# target trying to point one ruff invocation at two directories with
+# different per-file-ignore bases.
 lint: ## ruff + mypy + eslint
 	$(RUN) ruff check .
 	$(RUN) ruff format --check .
 	$(RUN) mypy libs/pipeline
+	$(RUN) ruff check ../infra
+	$(RUN) ruff format --check ../infra
+	cd frontend && npm run lint
 
 security-verify: ## Image scan, non-root, read-only rootfs, egress denied
 	@echo "not implemented until Phase 12" && exit 1

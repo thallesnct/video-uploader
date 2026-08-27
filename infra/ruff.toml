@@ -1,0 +1,8 @@
+# infra/ lives outside backend/ (AGENTS.md: operator tooling that runs before
+# the backend's venv exists) but should be held to the same lint rules, so
+# this extends the backend config rather than duplicating it.
+extend = "../backend/pyproject.toml"
+
+[lint.per-file-ignores]
+# Local operator scripts that talk to localhost over http on purpose.
+"*.py" = ["S310"]

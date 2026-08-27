@@ -12,8 +12,9 @@ htmlcov/
 
 # Node
 node_modules/
-web/dist/
+frontend/dist/
 .vite/
+*.tsbuildinfo
 
 # Local env & secrets — never commit real values; .env.example is the template
 .env
@@ -21,10 +22,11 @@ web/dist/
 *.pem
 *.key
 
-# Test media & scratch output
+# Test media & scratch output. *.ts alone would also match every TypeScript
+# source file in frontend/, so HLS segments are scoped to where ffmpeg
+# actually writes them (tmp/, already ignored) rather than matched globally.
 tmp/
 *.mp4
-*.ts
 *.m3u8
 !tests/fixtures/**
 

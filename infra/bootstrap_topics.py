@@ -14,7 +14,7 @@ import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-REGISTRY = ROOT / "libs" / "pipeline" / "topics.json"
+REGISTRY = ROOT / "backend" / "libs" / "pipeline" / "topics.json"
 PROFILE = "dev"
 BROKER = "localhost:9092"  # inside the kafka container
 
