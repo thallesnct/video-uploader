@@ -381,18 +381,66 @@ and two `events` rows (not four) — no duplicates anywhere.
    principle regress state out of order. Deferred as a Phase 12 item
    alongside the Phase 5 claim-window gap (see ADR-0007's follow-on).
 
-## Phase 7 — SSE gateway `[ ]`
+## Phase 7 — SSE gateway `[x]`
 Refs: ADR-0008
 
-- [ ] `GET /videos/{id}/events` — snapshot from Postgres first, then live deltas
-- [ ] Each API instance consumes `video.status` with a **unique `group.id`**
-- [ ] `Last-Event-ID` resume from the `events` table
-- [ ] `:heartbeat` every 15 s; `X-Accel-Buffering: no`; clean disconnect teardown
+- [x] `GET /videos/{id}/events` — snapshot from Postgres first, then live deltas
+- [x] Each API instance consumes `video.status` **and `pipeline.failed`** with
+      a unique, ephemeral `group_id` (`StatusBroadcaster`, never committed)
+- [x] `Last-Event-ID` resume — the same code path as a fresh connect, just a
+      different starting watermark, both reading from the `events` table
+- [x] 15s keep-alive ping (sse-starlette's default, matches the ADR exactly);
+      `X-Accel-Buffering: no` and `Cache-Control: no-store` (sse-starlette
+      defaults — stricter than the ADR's original `no-cache`, amended);
+      `finally: unsubscribe(...)` proven to run on disconnect
 
-**Gate:** `make integration ARGS="-k sse"` — (a) a client connecting *after* two
-renditions finished still receives both, then the third live; (b) with two API
-replicas, a client on replica A receives an event produced via replica B;
-(c) reconnect with `Last-Event-ID` replays no duplicates.
+**Gate:** `make integration ARGS="-k sse"` — 7 passed. (a) a client connecting
+after two renditions finished sees both in the snapshot, then the third live
+through the real projector and broadcaster; (b) two broadcasters with unique
+group ids both wake for one event, and the negative case (shared group id,
+asserted over a 20-event batch rather than one message — see below) shows a
+clean, non-overlapping split; (c) reconnect with `Last-Event-ID` replays no
+duplicates. Full combined integration suite: 43 passed, one session.
+
+**Discovered mid-phase, resolved before this phase closed:**
+
+1. The `events.id` an SSE client needs is assigned by the **projector**, a
+   separate, unsynchronized consumer of the same Kafka topic — the gateway
+   parsing the live message and inventing an id would not agree with it.
+   Resolved: the gateway's Kafka consumer only reads the message **key**
+   (`video_id`) as a wake-up signal; content and ids always come from
+   re-querying Postgres, unifying fresh-connect and `Last-Event-ID` resume
+   into one code path. See ADR-0008's follow-on.
+2. `AIOKafkaConsumer.assignment()` being non-empty is not the same milestone
+   as `auto_offset_reset="latest"` actually resolving to a concrete fetch
+   position — that resolution is otherwise lazy. Deterministically reproduced
+   (5/5) a message published right after `start()` returns being missed by a
+   freshly-started consumer; fixed with `seek_to_end()` (5/5 clean after).
+   This is the same *class* of bug `StageWorker.wait_for_assignment()` exists
+   to prevent for confluent-kafka, in aiokafka's own shape.
+3. FastAPI's `TestClient` was verified (not assumed) to buffer an entire SSE
+   response before returning any of it — useless for asserting live timing.
+   `sse_stream` was pulled out as a standalone async generator, parametrized
+   on `sessions`/`broadcaster` rather than `app.state.*`, specifically so
+   tests can drive it by direct async iteration against real Kafka/Postgres.
+   One HTTP-level test still covers the route wiring itself, using a stream
+   that terminates on its own (an already-failed video).
+4. Gate (b)'s negative case (shared `group_id` delivers to only one replica)
+   was flaky on a single message even with a settle delay and re-seek — a
+   two-way rebalance's timing isn't deterministic enough at that grain.
+   Rewritten to assert the aggregate property over 20 events (every event
+   delivered, none delivered to both) instead, which is what the test is
+   actually there to prove and doesn't depend on that timing.
+
+**Not addressed, documented instead:** `video.completed` as a terminal event
+— nothing emits `VideoState.COMPLETED` before Phase 9, so its shape isn't
+settled; only `failed` ends the stream today, re-checked from the video row's
+`status` column every poll rather than inferred from event payloads, so
+Phase 9 extends this by widening one comparison. Also: a browser's
+`EventSource` auto-reconnects even after a clean server close, so Phase 8's
+frontend must call `eventSource.close()` itself on a terminal event — recorded
+as a cross-phase contract in ADR-0008's follow-on, not something Phase 7 can
+enforce from the server.
 
 ## Phase 8 — Frontend `[ ]`
 
