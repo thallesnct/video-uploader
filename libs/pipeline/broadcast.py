@@ -32,6 +32,15 @@ log = logging.getLogger(__name__)
 
 class StatusBroadcaster:
     def __init__(self, client: Any | None = None) -> None:
+        """client is for tests that need a real AIOKafkaConsumer with custom
+        config (e.g. a shared group_id, to exercise Kafka's own load-balancing
+        against it) — it must be an unstarted consumer. start() always calls
+        .start() on it, unconditionally; passing an already-started client
+        hits aiokafka's own "Did you call start twice?" assertion. Unlike
+        AsyncEventProducer's client param, this is not a fully-fake test
+        double that start() leaves alone — it still goes through the same
+        start()+seek_to_end() lifecycle as an internally-created one.
+        """
         self._client = client
         self._task: asyncio.Task[None] | None = None
         self._wakeups: dict[UUID, set[asyncio.Event]] = {}

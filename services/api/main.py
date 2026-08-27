@@ -281,12 +281,15 @@ async def video_events(
 ) -> EventSourceResponse:
     """Snapshot then live deltas (ADR-0008), or replay from Last-Event-ID.
 
-    The concurrent-stream cap is checked here, advisory-only: two requests
-    can both pass it before either increments (the actual counting happens
-    once streaming starts, in counted_stream's try/finally, which is what
-    guarantees the decrement runs even if the client never reads a byte). A
-    small, bounded overshoot of a soft resource limit is an acceptable
-    trade for not needing a lock on every connection attempt.
+    The concurrent-stream cap is checked here, advisory-only: the counter
+    only increments once EventSourceResponse actually starts iterating
+    counted_stream, not at this check, so any number of requests already
+    in flight past this point — not just two — can all pass before the
+    first of them increments it. That is the actual overshoot bound, not a
+    small fixed one; acceptable for a soft resource limit, but a load test
+    (Phase 14) will find the real ceiling if this ever needs to be a hard
+    one. counted_stream's try/finally is what guarantees the decrement runs
+    even if the client never reads a byte.
     """
     limits = sse_settings()
     if app.state.sse_active >= limits.max_concurrent_streams:
