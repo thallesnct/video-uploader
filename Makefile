@@ -128,16 +128,24 @@ $(E2E_FIXTURE):
 # for every host OS/arch combination (hit exactly this — "Playwright does not
 # support chromium on mac13-arm64" — scaffolding this phase), and CI would run
 # it in a container regardless, so this keeps the local and CI paths identical.
+# e2e overrides api's S3_PUBLIC_ENDPOINT to minio:9000 (the browser driving
+# this run is itself inside the compose network, so a presigned URL signed
+# for "localhost" points nowhere reachable) and starts the e2e-only frontend
+# on host port 5173. Both are cleaned up unconditionally below — a run that
+# exits without doing this leaves `api` handing out presigned URLs a normal
+# host-run browser can't resolve, and squats on the port `npm run dev` wants
+# (found leaking into a real dev session after a `make e2e` earlier).
 e2e: up migrate ## Full compose + Playwright
-	# S3_PUBLIC_ENDPOINT=minio, not localhost: the browser driving this run is
-	# itself inside the compose network (Playwright's container), so a
-	# presigned URL signed for "localhost" would point nowhere reachable.
 	S3_PUBLIC_ENDPOINT=http://minio:9000 $(COMPOSE) --profile app --profile e2e up -d --build --wait
 	@$(MAKE) --no-print-directory $(E2E_FIXTURE)
 	docker run --rm --network video-pipeline_default \
 	  -v "$(CURDIR)/tests/e2e":/e2e -w /e2e \
 	  -e E2E_BASE_URL=http://frontend:5173 \
-	  mcr.microsoft.com/playwright:v1.62.1-noble sh -c "npm ci && npm test -- $(ARGS)"
+	  mcr.microsoft.com/playwright:v1.62.1-noble sh -c "npm ci && npm test -- $(ARGS)"; \
+	test_status=$$?; \
+	$(COMPOSE) --profile app up -d --build --wait api; \
+	$(COMPOSE) --profile app --profile e2e stop frontend; \
+	exit $$test_status
 
 # infra/ sits outside backend/ on purpose (AGENTS.md: operator tooling that
 # runs before the backend's venv exists) but still wants the same lint rules —
