@@ -122,3 +122,19 @@ def test_the_final_cue_is_clamped_to_the_actual_duration() -> None:
     cue_lines = [line for line in vtt.splitlines() if "-->" in line]
 
     assert cue_lines[-1] == "00:00:05.000 --> 00:00:07.000"
+
+
+@pytest.mark.parametrize("duration_s", [2.0, 5.0, 23.0, 3600.0])
+def test_a_planned_layouts_vtt_spans_the_whole_duration(duration_s: float) -> None:
+    """The invariant a scrubber actually depends on: end-to-end from a real
+    plan_sprite output, not a hand-built SpriteLayout — plan_sprite spaces
+    tiles by duration_s / (count + 1), not by the nominal interval_s, so this
+    is the only test that would catch the two drifting apart."""
+    layout = plan_sprite(duration_s)
+    vtt = build_vtt(layout, "sprite.jpg", duration_s)
+    cue_lines = [line for line in vtt.splitlines() if "-->" in line]
+    last_end = cue_lines[-1].split(" --> ")[1]
+
+    hours, minutes, seconds = last_end.split(":")
+    last_end_s = int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+    assert last_end_s == pytest.approx(duration_s, abs=0.01)

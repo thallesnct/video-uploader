@@ -155,7 +155,12 @@ def build_vtt(layout: SpriteLayout, sprite_key: str, duration_s: float) -> str:
     lines = ["WEBVTT", ""]
     for index in range(layout.count):
         start = index * layout.interval_s
-        end = min((index + 1) * layout.interval_s, duration_s) if duration_s > start else start
+        is_last = index == layout.count - 1
+        # The last cue always reaches the true end, regardless of interval_s —
+        # plan_sprite deliberately spaces samples inside duration_s with a
+        # margin (ffmpeg-safety, not a scrubber concern), so nominal spacing
+        # alone would leave a dead zone at the end where no cue is active.
+        end = duration_s if is_last else (index + 1) * layout.interval_s
         end = max(end, start + 0.001)  # a cue's end must be strictly after its start
         column = index % layout.columns
         row = index // layout.columns
