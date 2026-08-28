@@ -835,6 +835,13 @@ upgrade path. This keeps the phase buildable now; the KEDA and NetworkPolicy
 items below are written as K8s-when-adopted and degrade to compose equivalents
 (`deploy.replicas`, an internal-only network) on a single host.
 
+**No live target, by design (confirmed with the user 2026-08-28, see PLAN.md's
+scope note):** this project is never deployed anywhere real or persistent.
+"`<staging-url>`" in the gate below means standing the hardened profile up
+locally (or a local kind/minikube cluster if K8s is pursued) long enough to
+run the e2e suite against it, then tearing it down — not a cloud host or
+anything left running.
+
 - [ ] `docker-compose.prod.yml` (hardened profile) — or Helm chart if K8s is chosen
 - [ ] Secrets via the platform's secret store (or SOPS); nothing in the image
 - [ ] Lag-based worker scaling — KEDA on K8s; a documented manual
@@ -893,6 +900,7 @@ bottleneck of each named.
 
 | Date | Change | Why |
 |---|---|---|
+| 2026-08-28 | Documented, in `PLAN.md` (scope note near the top) and `PROGRESS.md` (Phase 13's assumption callout): this project is never deployed to a real/live environment — "production ready" is a demonstrated code/architecture standard by the end of development, not an operational target | User confirmed directly, after the server-side-cache discussion; needed to be in the repo itself (not just session memory) so it survives a cleared context or a new session, per the user's own ask |
 | 2026-08-28 | Decided **against** a server-side cache in front of `video_media` for now — no code change | No shared/public-video concept exists (ADR-0016: every video is single-owner, checked per request), so "many different clients hammering the same object" isn't a load pattern this app currently produces; the client-side `immutable` cache already covers the realistic case (same owner, repeat requests). A real shared cache/CDN would conflict with the per-request `Authorization` check as designed — a genuine redesign (signed per-segment URLs or an auth-aware CDN), ADR-worthy on its own if load evidence ever justifies it (Phase 12/14), not a quick patch now |
 | 2026-08-28 | `video_media` now sends `Cache-Control: private, max-age=31536000, immutable` on every response | It set no caching headers at all, so hls.js re-requesting a rendition it already fetched (its own buffer-flush behavior on every quality switch) round-tripped through MinIO every time — user-reported, seen live. Safe to cache indefinitely: every object this route serves is written once and never overwritten with different content, the same idempotency invariant `worker_transcode`/`worker_package` already rely on |
 | 2026-08-28 | `VideoPlayer` gained a manual quality control: a gear button overlaid on the video (top-right, off the native `<video controls>` bar) opening a menu of `Auto` + each rendition, driving hls.js's `currentLevel` directly. Covered by `tests/e2e/hls-quality-selector.spec.ts`. `PLAN.md`'s `web` row updated to mention it | hls.js (already chosen, ADR-0014, specifically over a native player because it exposes level control) already carries `levels`/`currentLevel`; ADR-0012's own scoping test ("new topology or just a flag?") says this isn't new pipeline topology, so no new ADR. Labels come from the rendition name embedded in each level's playlist URL, not `Level.height` — `master.m3u8` carries no `RESOLUTION=` attribute and no rendition has real width/height persisted anywhere, so `Level.height` is `0` for every level |

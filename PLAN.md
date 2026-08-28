@@ -8,6 +8,18 @@ Status: **planning complete, implementation not started.** Track work in
 [PROGRESS.md](PROGRESS.md). Every decision below is recorded as an ADR in
 [docs/adr/](docs/adr/README.md) — read those for the rejected alternatives.
 
+**Scope note (confirmed with the user 2026-08-28):** this system is built to
+a genuine production-readiness bar (ADR-0015) — hardening, observability,
+idempotency, the works — but it is **never actually deployed to a live or
+production environment.** "Production ready" means the code and
+architecture demonstrate that standard by the end of development, not that
+anything runs beyond local Docker Compose. Weigh design trade-offs
+accordingly: prefer whatever most clearly demonstrates the production-grade
+decision over whatever would be cheapest for an actual live deployment.
+Phase 13 ("Deployment") means standing up the hardened profile locally long
+enough to prove its own gate passes, then tearing it down — not a
+persistent target.
+
 ---
 
 ## 1. What we are building
