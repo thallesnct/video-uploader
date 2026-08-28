@@ -67,6 +67,21 @@ export function useVideoEvents(
         const snapshot = JSON.parse((event as MessageEvent).data) as VideoSnapshot;
         queryClient.setQueryData(["video", videoId], snapshot.video);
         queryClient.setQueryData(["renditions", videoId], snapshot.renditions);
+        // A fresh connect to a video that's already terminal: the server's
+        // sse_stream (services/api/sse.py) sends this snapshot and returns
+        // immediately after, with no live "status"/"failed" event to follow
+        // — its terminal check re-reads the row on the very next loop pass,
+        // before any new row exists to yield. Without this, closedForGood
+        // never gets set, EventSource treats the clean close as an error,
+        // and reconnects forever: fresh connect -> snapshot -> close ->
+        // onerror -> reconnect, in a tight ~1s loop (ADR-0008's terminal-
+        // event contract only covers a video *becoming* terminal mid-stream,
+        // not one that already was).
+        if (snapshot.video.status === "completed" || snapshot.video.status === "failed") {
+          closedForGood = true;
+          es?.close();
+          setState("closed");
+        }
       });
 
       es.addEventListener("status", (event) => {
