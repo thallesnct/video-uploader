@@ -25,7 +25,7 @@ commit splits into two.
 | 8 | Frontend | `[ ]` | `make e2e ARGS="-k upload_flow"` |
 | 9 | Thumbnails, HLS & completion join | `[x]` | `make e2e ARGS="--grep hls"` ✅ 1 test |
 | 10 | Observability | `[x]` | `make obs-verify` ✅ passing |
-| 11 | Notify & failure UX | `[ ]` | `make e2e ARGS="-k failure"` |
+| 11 | Notify & failure UX | `[x]` | `make e2e ARGS="--grep failure"` ✅ 2 tests + `make replay-verify` ✅ passing |
 | 12 | Production hardening | `[ ]` | `make ci` from a clean clone + `make security-verify` |
 | 13 | Deployment | `[ ]` | `make deploy-staging && make e2e BASE_URL=<staging>` |
 | 14 | Load testing | `[ ]` | Four scenarios run, results and bottlenecks recorded |
@@ -835,12 +835,12 @@ dependency (non-negotiable #9) that a documentation phase doesn't justify
 on its own — the dashboard says so in its own text panel rather than
 shipping panels with permanently no data.
 
-## Phase 11 — Notify & failure UX `[ ]`
+## Phase 11 — Notify & failure UX `[x]`
 
-- [ ] `worker_notify`: webhook on `video.completed`, own consumer group, own retries
-- [ ] Failure surfacing: DLQ'd renditions show as failed in the UI with a reason
-- [ ] Manual replay endpoint/CLI: DLQ → source topic
-- [ ] **Retry-tier pump** — a service that drains each `<topic>.retry.<tier>`
+- [x] `worker_notify`: webhook on `video.completed`, own consumer group, own retries
+- [x] Failure surfacing: DLQ'd renditions show as failed in the UI with a reason
+- [x] Manual replay endpoint/CLI: DLQ → source topic
+- [x] **Retry-tier pump** — a service that drains each `<topic>.retry.<tier>`
       once its delay elapses and republishes to `<topic>`. ADR-0002 and
       ADR-0009 named this component from the start ("retry pump" appears in
       both), but no phase ever scheduled building it, and none of the
@@ -859,11 +859,141 @@ shipping panels with permanently no data.
       that message would have been stranded on `video.probe.retry.10s`
       forever rather than self-healing once the compose fix landed.
 
-**Gate:** `make e2e ARGS="-k failure"` — a corrupt upload shows a failed state in the UI
-with a reason, the webhook fires for a successful one, and a DLQ replay drives the
-video to completion. The retry-pump item additionally needs its own redelivery
-test: produce a TRANSIENT failure, assert the message reaches `<topic>` again
-after (not before) its tier's delay, with no earlier delivery.
+**Gate:** `make e2e ARGS="--grep failure"` — a corrupt upload shows a failed state in
+the UI with a reason, the webhook fires for a successful one, and a DLQ replay
+drives the video to completion. The retry-pump item additionally needs its own
+redelivery test: produce a TRANSIENT failure, assert the message reaches `<topic>`
+again after (not before) its tier's delay, with no earlier delivery.
+
+```
+$ make e2e ARGS="--grep failure"
+  ✓  1 failure-and-notify.spec.ts:17:1 › failure UX: a corrupt upload reaches
+     failed with a reason, not stuck pending (13.8s)
+  ✓  2 failure-and-notify.spec.ts:49:1 › failure UX: webhook-sink receives a
+     notification for a completed video (13.1s)
+  2 passed (31.5s)
+
+$ make replay-verify
+seeding a real, valid upload straight onto video.uploaded.dlq
+  PASS  devauth issues a token
+  PASS  POST /videos
+  PASS  PUT the real fixture to the presigned URL
+  PASS  seed video.uploaded.dlq with a valid-file message
+  PASS  publish video.status=uploaded (what /complete would have)
+confirming it's genuinely stuck, not progressing on its own
+  PASS  video is stuck at uploaded before replay (DLQ isn't auto-drained)
+running the real `make replay` CLI
+  PASS  make replay's own CLI (infra/replay.py) exits 0 — replayed 1 message(s)
+        from video.uploaded.dlq to video.uploaded
+polling for completion
+  PASS  replayed video reaches completed (not failed, not stuck) — got 'completed'
+REPLAY-VERIFY PASSED — a DLQ'd valid-payload message reached completed via replay
+
+$ make integration ARGS="-k retry_pump"
+tests/integration/test_retry_pump.py .                                   [100%]
+1 passed, 75 deselected in 44.00s
+
+$ make integration
+tests/integration/test_package.py ........                               [ 10%]
+tests/integration/test_probe.py ......                                   [ 18%]
+tests/integration/test_projector.py ........                             [ 28%]
+tests/integration/test_retry_pump.py .                                   [ 30%]
+tests/integration/test_sse.py ...........                                [ 44%]
+tests/integration/test_thumbnail.py ....                                 [ 50%]
+tests/integration/test_transcode.py .....                                [ 56%]
+tests/integration/test_upload.py ..........................              [ 90%]
+tests/integration/test_video_media.py .......                            [100%]
+76 passed, 5 warnings in 359.06s (0:05:59)
+```
+
+**Discovered mid-implementation:**
+
+1. **The gate text itself had the stale `-k` bug** — `ARGS="-k failure"` is
+   pytest's flag; Playwright has no `-k`, only `--grep`, so this line would
+   have silently run every e2e spec unfiltered. Same class of bug already
+   caught and fixed for Phase 8's and Phase 9's gate text earlier this
+   session; fixed here too, plus in the summary table above.
+2. **The plan's assumed gap in `_apply_failure` didn't exist.** It already
+   wrote the rendition-level `status`/`failure_reason` row on a
+   rendition-scoped `PipelineFailed` (an `on_conflict_do_update` block from
+   Phase 9, unused on this path until now) — the real gap was one layer up,
+   in `services/api/sse.py`'s `sse_event_name()`, which mapped every
+   `pipeline.failed` row to the bare `"failed"` event name regardless of
+   payload shape. Caught by reading the actual code before implementing,
+   not by trusting the plan's description of it.
+3. **A genuinely corrupt file can never prove the DLQ-replay-to-completion
+   leg of this gate.** `worker_probe`'s ffprobe failure on unparseable
+   input is `TerminalError` — it fails *identically* on every attempt, so
+   replaying the same bad bytes just re-dead-letters them. The only
+   scenario where a replay is meaningful is the real-world one it exists
+   for: a message dead-lettered for a reason since resolved, whose
+   underlying data was fine all along. `infra/replay_verify.py` builds
+   exactly that — a real, valid upload whose `video.uploaded` is seeded
+   straight onto `video.uploaded.dlq` instead of the live topic (as if some
+   now-fixed condition had dead-lettered it), then replayed via the actual
+   shipped `infra/replay.py` CLI as a subprocess, not a reimplementation of
+   its logic. New `make replay-verify` target, separate from `e2e` for the
+   same reason `obs-verify` already is: it needs `api` in its normal
+   (non-e2e-profile) `S3_PUBLIC_ENDPOINT`, which `make e2e` only restores on
+   its way out — the replay-verify run's first attempt failed at the
+   presigned-PUT step for exactly this reason before that was caught.
+4. **This also means the third gate leg isn't inside
+   `tests/e2e/failure-and-notify.spec.ts`.** `make replay` is a host CLI
+   action by ADR-0005's own stated design (`make replay TOPIC=… VIDEO=…`),
+   not an HTTP endpoint the Playwright container — which has no Docker
+   socket and isn't on the host — could ever invoke. The spec covers the
+   two legs that are genuinely browser-observable (failed-with-a-reason,
+   webhook delivery); `replay_verify.py` covers the third for real, on its
+   own re-runnable gate.
+5. **None of the three new service images (`worker-notify`,
+   `worker-retry-pump`, `webhook-sink`) had ever been built via
+   `docker compose --profile app up --build`** before this phase's closing
+   verification — every prior check used `make integration ARGS="-k ..."`,
+   which never touches the compose stack. Built and confirmed all three
+   reach `healthy` (including `worker-notify`, which would have
+   crash-looped on start if `NOTIFY_WEBHOOK_URL` resolved wrong) before
+   writing a single line of the e2e spec, on the advisor's flag that this
+   was cheaper to catch now than inside a Playwright timeout.
+
+**Deliberately out of scope, carried forward from an earlier commit's own
+note:** the rendition-level failed tile (`.tileFailed`, the ✗ mark,
+`rendition.failed` SSE event) is covered by an integration test
+(`test_sse.py`'s `test_a_rendition_failure_streams_live_as_rendition_failed`,
+driven at the projector/Kafka/broadcaster layer) but not a browser e2e
+test. Engineering a real "one rendition fails, others succeed" pipeline
+run needs fault injection this codebase doesn't have — every failure this
+phase's e2e coverage can trigger for real (a corrupt upload) fails at
+`worker_probe`, before any rendition-specific work starts, so it can only
+ever exercise the whole-video failure path, which is what the gate's own
+wording asks for ("a corrupt upload shows a failed state in the UI").
+
+**Also learned, closing this phase's gate:** running `make integration`
+concurrently with the real `docker compose --profile app` stack (left
+running from the e2e verification just before it) produced 76 spurious
+setup errors, not 76 real failures — testcontainers' own dynamic-port
+containers never collided on ports, but a laptop running ten-plus
+app-profile containers alongside a fresh Kafka/Postgres/MinIO trio per
+test module starved something (never root-caused further, not worth the
+time). Stopping the app profile first (`docker compose --profile app
+--profile e2e stop`) made the exact same suite pass clean. Not a code bug;
+recorded here since it cost real time to notice and would again.
+
+**Two more caught by a second advisor pass after the first version of this
+commit:** `ci: lint unit integration e2e` never ran `replay-verify` — the
+leg just built to close this phase's own gate was invisible to Phase 12's
+gate ("`make ci` green"). `e2e`'s own recipe already restores `api` to its
+normal (non-e2e-profile) `S3_PUBLIC_ENDPOINT` unconditionally on the way
+out, so `replay-verify` can safely run right after it in the same `ci`
+chain — verified for real (not assumed): ran the exact `e2e` → restore →
+`replay-verify` sequence by hand and it passed. `ci` now reads `lint unit
+integration e2e replay-verify`. Also, `check_stuck_before_replay`'s first
+version read the video's status exactly once right after seeding — a real
+flake against a freshly-restarted stack, since the seeded
+`video.status=uploaded` event can take a couple of seconds to reach the
+projector's consumer; a single-shot check can catch the row before it
+catches up and fail on a status that was correct, just not yet applied.
+Fixed with the same poll-with-timeout idiom `wait_for_completion` already
+uses.
 
 ## Phase 12 — Production hardening `[ ]`
 Refs: ADR-0015
@@ -974,6 +1104,7 @@ bottleneck of each named.
 
 | Date | Change | Why |
 |---|---|---|
+| 2026-08-28 | Phase 11 closed `[x]`: `worker_notify` (webhook on `video.completed`/`pipeline.failed`), `webhook-sink` test double, `worker_retry_pump` (drains every retry-tier topic, republishes after its delay), rendition-level failure surfacing (`_apply_failure` already wrote the row; `sse_event_name()` was the actual gap), `infra/replay.py` (`make replay`, stdlib CLI), `infra/replay_verify.py`/`make replay-verify` (the DLQ-replay-to-completion leg of the gate, since a truly corrupt file can never prove it) | ADR-0002/0005/0009 all named the retry pump from the start but no phase ever scheduled it, leaving transient failures a silent permanent drop since Phase 5 (flagged in this phase's own checklist note) — the biggest reliability gap left in the system before this phase closed it |
 | 2026-08-28 | Phase 10 closed `[x]`: `worker_transcode`'s missing tracer and the missing `video_id` span attribute fixed; manual ffmpeg/ffprobe spans and SQLAlchemy/botocore auto-instrumentation added; `stage_in_flight_seconds`/`sse_connections_active` (both previously dead metrics) fixed and wired; the four remaining ADR-0010 alerts added; four Grafana dashboards written and verified against the live stack; `make obs-verify` implemented and green | Most of ADR-0010's design was already scaffolded in `libs/pipeline/obs.py`/`health.py` before this phase's first commit — reading the actual wiring instead of the checklist found the gaps were in *using* it, not building it, and the most important one (transcode's spans being silent no-ops) is exactly the kind of thing that looks fine until the gate this phase adds actually checks |
 | 2026-08-28 | Documented, in `PLAN.md` (scope note near the top) and `PROGRESS.md` (Phase 13's assumption callout): this project is never deployed to a real/live environment — "production ready" is a demonstrated code/architecture standard by the end of development, not an operational target | User confirmed directly, after the server-side-cache discussion; needed to be in the repo itself (not just session memory) so it survives a cleared context or a new session, per the user's own ask |
 | 2026-08-28 | Decided **against** a server-side cache in front of `video_media` for now — no code change | No shared/public-video concept exists (ADR-0016: every video is single-owner, checked per request), so "many different clients hammering the same object" isn't a load pattern this app currently produces; the client-side `immutable` cache already covers the realistic case (same owner, repeat requests). A real shared cache/CDN would conflict with the per-request `Authorization` check as designed — a genuine redesign (signed per-segment URLs or an auth-aware CDN), ADR-worthy on its own if load evidence ever justifies it (Phase 12/14), not a quick patch now |

@@ -21,7 +21,7 @@ DC_OBS  := docker compose -f docker-compose.yml -f docker-compose.obs.yml
 
 .DEFAULT_GOAL := help
 .PHONY: help up down logs ps topics buckets bootstrap smoke migrate replay \
-        obs-up obs-down obs-verify unit integration e2e lint ci security-verify
+        obs-up obs-down obs-verify replay-verify unit integration e2e lint ci security-verify
 
 help: ## List targets
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | sort | \
@@ -70,6 +70,18 @@ obs-verify: up migrate obs-up ## Dashboards provision, traces span all stages, l
 	$(DC_OBS) --profile app up -d --build --wait
 	@$(MAKE) --no-print-directory $(E2E_FIXTURE)
 	@python3 infra/obs_verify.py
+
+# The third leg of Phase 11's gate (a DLQ replay drives a video to
+# completion) isn't in tests/e2e/ — `make replay` is a host CLI action by
+# ADR-0005's own design, not something the Playwright container can invoke,
+# and a genuinely corrupt file could never reach completed by being
+# replayed unchanged. Separate from `e2e` for the same reason obs-verify is
+# separate from it: it needs `api` in its normal (non-e2e-profile)
+# S3_PUBLIC_ENDPOINT, which `make e2e` only restores on its way out.
+replay-verify: up migrate ## Phase 11 gate, third leg: a DLQ replay drives a video to completed
+	$(COMPOSE) --profile app up -d --build --wait
+	@$(MAKE) --no-print-directory $(E2E_FIXTURE)
+	@python3 infra/replay_verify.py
 
 unit: ## Fast tests, no I/O, no containers
 	$(RUN) pytest tests/unit $(ARGS)
@@ -168,4 +180,4 @@ lint: ## ruff + mypy + eslint
 security-verify: ## Image scan, non-root, read-only rootfs, egress denied
 	@echo "not implemented until Phase 12" && exit 1
 
-ci: lint unit integration e2e ## Everything CI runs
+ci: lint unit integration e2e replay-verify ## Everything CI runs
