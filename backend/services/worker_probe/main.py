@@ -33,6 +33,7 @@ from pipeline.media import MediaInfo, probe
 from pipeline.obs import setup_tracing
 from pipeline.producer import EventProducer
 from pipeline.retry import RetryPolicy, TransientError
+from pipeline.runner import run_worker
 from pipeline.settings import observability_settings
 from pipeline.storage import ObjectStore, object_store, rendition_key
 from pipeline.topics import (
@@ -175,11 +176,7 @@ def main() -> None:
     serve_health(health, observability_settings().metrics_port)
 
     worker.subscribe()
-    try:
-        worker.run()
-    finally:
-        producer.flush()
-        consumer.close()
+    run_worker(worker, producer=producer, consumer=consumer)
 
 
 if __name__ == "__main__":

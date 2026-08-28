@@ -26,6 +26,7 @@ from pipeline.health import HealthRegistry, serve_health
 from pipeline.obs import setup_tracing
 from pipeline.producer import EventProducer
 from pipeline.retry import RetryPolicy, TerminalError, TransientError
+from pipeline.runner import run_worker
 from pipeline.settings import notify_settings, observability_settings
 from pipeline.topics import PIPELINE_FAILED, REGISTRY, VIDEO_COMPLETED
 
@@ -100,11 +101,7 @@ def main() -> None:
     serve_health(health, observability_settings().metrics_port)
 
     worker.subscribe(topics=[VIDEO_COMPLETED, PIPELINE_FAILED])
-    try:
-        worker.run()
-    finally:
-        producer.flush()
-        consumer.close()
+    run_worker(worker, producer=producer, consumer=consumer)
 
 
 if __name__ == "__main__":

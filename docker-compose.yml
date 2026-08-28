@@ -169,6 +169,12 @@ services:
       target: runtime
     container_name: vp-worker-probe
     restart: unless-stopped
+    # Default 10s isn't quite enough: a real SIGTERM proof this phase (kill
+    # -s SIGTERM against a live container) measured ~8s just for the
+    # consumer's own clean group-leave (LeaveGroupRequest), before any
+    # in-flight ffprobe call (up to 60s, media.py) even gets counted. 45s
+    # covers the worst realistic single in-flight call plus that overhead.
+    stop_grace_period: 45s
     profiles: ["app"]
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
@@ -208,6 +214,13 @@ services:
       target: runtime
     container_name: vp-worker-transcode
     restart: unless-stopped
+    # The one worker where this actually matters (ADR-0015 §4: "grace period
+    # above the p99 rendition time"): timeout_budget_s's own floor is 120s,
+    # and real sources scale past it (source_duration_s * 8). 180s clears
+    # that floor with margin plus the ~8s group-leave overhead measured live
+    # this phase; Phase 14's real load numbers should revisit this once a
+    # true p99 exists (today's number is reasoned, not measured under load).
+    stop_grace_period: 180s
     profiles: ["app"]
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
@@ -246,6 +259,9 @@ services:
       target: runtime
     container_name: vp-worker-thumbnail
     restart: unless-stopped
+    # See worker-probe's comment: ~8s group-leave overhead measured live,
+    # plus this worker's longest single ffmpeg call (60s, sprite sheet).
+    stop_grace_period: 75s
     profiles: ["app"]
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
@@ -281,6 +297,10 @@ services:
       target: runtime
     container_name: vp-projector
     restart: unless-stopped
+    # See worker-probe's comment for where the ~8s group-leave overhead
+    # comes from. No ffmpeg call on this path at all — a plain DB write per
+    # message — so the default 30s floor used elsewhere is already generous.
+    stop_grace_period: 30s
     profiles: ["app"]
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
@@ -312,6 +332,8 @@ services:
       target: runtime
     container_name: vp-worker-package
     restart: unless-stopped
+    # See projector's comment — a master.m3u8 write is fast, no ffmpeg here.
+    stop_grace_period: 30s
     profiles: ["app"]
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
@@ -353,6 +375,8 @@ services:
       target: runtime
     container_name: vp-worker-notify
     restart: unless-stopped
+    # See projector's comment — one HTTP POST, no ffmpeg here.
+    stop_grace_period: 30s
     profiles: ["app"]
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
@@ -387,6 +411,18 @@ services:
       target: runtime
     container_name: vp-worker-retry-pump
     restart: unless-stopped
+    # Named, accepted limitation, not silently glossed over (same framing
+    # this service's own main.py already uses for its one-message-at-a-time
+    # design): the handler can legitimately time.sleep() up to a tier's own
+    # delay (600s for "10m") before republishing. stop()'s "let the in-flight
+    # handler finish" contract means a SIGTERM landing just as that sleep
+    # starts would need a 600s+ grace period for a fully graceful exit, which
+    # isn't worth paying for a dev/demo compose file. 60s here means a
+    # SIGTERM during a long in-tier sleep gets SIGKILLed instead — the
+    # message was never acked either way (offset only commits after the
+    # republish succeeds), so redelivery on next start is exactly what
+    # ADR-0005 already relies on, not silent loss.
+    stop_grace_period: 60s
     profiles: ["app"]
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092

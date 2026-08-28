@@ -998,7 +998,7 @@ uses.
 ## Phase 12 — Production hardening `[ ]`
 Refs: ADR-0015
 
-- [ ] Graceful SIGTERM shutdown everywhere: stop consuming, finish or cleanly
+- [x] Graceful SIGTERM shutdown everywhere: stop consuming, finish or cleanly
       abort in-flight work, commit offsets, flush producer, close
 - [ ] **Media-worker containment** — non-root, read-only rootfs + tmpfs scratch,
       `cap-drop ALL`, `no-new-privileges`, seccomp, no network egress beyond

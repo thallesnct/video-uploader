@@ -43,6 +43,7 @@ from pipeline.obs import TRANSCODE_REALTIME_RATIO, setup_tracing
 from pipeline.producer import EventProducer
 from pipeline.repository import RenditionRepository
 from pipeline.retry import RetryPolicy, TransientError
+from pipeline.runner import run_worker
 from pipeline.settings import observability_settings
 from pipeline.storage import (
     ObjectStore,
@@ -262,12 +263,7 @@ def main() -> None:
     serve_health(health, observability_settings().metrics_port)
 
     worker.subscribe()
-    try:
-        worker.run()
-    finally:
-        producer.flush()
-        consumer.close()
-        engine.dispose()
+    run_worker(worker, producer=producer, consumer=consumer, engine=engine)
 
 
 if __name__ == "__main__":

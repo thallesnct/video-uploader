@@ -34,6 +34,7 @@ from pipeline.obs import setup_tracing
 from pipeline.producer import EventProducer
 from pipeline.repository import PackagerRepository
 from pipeline.retry import RetryPolicy, TerminalError, TransientError
+from pipeline.runner import run_worker
 from pipeline.settings import observability_settings
 from pipeline.storage import ObjectStore, hls_master_key, object_store, scratch_key
 from pipeline.topics import (
@@ -206,12 +207,7 @@ def main() -> None:
     serve_health(health, observability_settings().metrics_port)
 
     worker.subscribe(topics=[RENDITION_COMPLETED, VIDEO_PROBED])
-    try:
-        worker.run()
-    finally:
-        producer.flush()
-        consumer.close()
-        engine.dispose()
+    run_worker(worker, producer=producer, consumer=consumer, engine=engine)
 
 
 if __name__ == "__main__":

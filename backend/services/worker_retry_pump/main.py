@@ -49,6 +49,7 @@ from pipeline.health import HealthRegistry, serve_health
 from pipeline.obs import setup_tracing
 from pipeline.producer import EventProducer
 from pipeline.retry import RetryPolicy, source_topic_of, tier_delay_seconds, tier_of
+from pipeline.runner import run_worker
 from pipeline.settings import observability_settings
 from pipeline.topics import REGISTRY
 
@@ -111,11 +112,7 @@ def main() -> None:
     serve_health(health, observability_settings().metrics_port)
 
     worker.subscribe(topics=topics)
-    try:
-        worker.run()
-    finally:
-        producer.flush()
-        consumer.close()
+    run_worker(worker, producer=producer, consumer=consumer)
 
 
 if __name__ == "__main__":

@@ -23,6 +23,7 @@ from pipeline.obs import setup_tracing
 from pipeline.producer import EventProducer
 from pipeline.repository import ProjectorRepository
 from pipeline.retry import RetryPolicy, TerminalError
+from pipeline.runner import run_worker
 from pipeline.settings import observability_settings
 from pipeline.topics import PIPELINE_FAILED, REGISTRY, VIDEO_STATUS
 from sqlalchemy import text
@@ -93,12 +94,7 @@ def main() -> None:
     serve_health(health, observability_settings().metrics_port)
 
     worker.subscribe(topics=[VIDEO_STATUS, PIPELINE_FAILED])
-    try:
-        worker.run()
-    finally:
-        producer.flush()
-        consumer.close()
-        engine.dispose()
+    run_worker(worker, producer=producer, consumer=consumer, engine=engine)
 
 
 if __name__ == "__main__":

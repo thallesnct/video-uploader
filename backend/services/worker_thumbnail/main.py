@@ -33,6 +33,7 @@ from pipeline.health import HealthRegistry, serve_health
 from pipeline.obs import setup_tracing
 from pipeline.producer import EventProducer
 from pipeline.retry import RetryPolicy, TerminalError, TransientError
+from pipeline.runner import run_worker
 from pipeline.settings import observability_settings
 from pipeline.storage import ObjectStore, object_store, poster_key, scratch_key
 from pipeline.storage import sprite_key as sprite_key_for
@@ -169,11 +170,7 @@ def main() -> None:
     serve_health(health, observability_settings().metrics_port)
 
     worker.subscribe()
-    try:
-        worker.run()
-    finally:
-        producer.flush()
-        consumer.close()
+    run_worker(worker, producer=producer, consumer=consumer)
 
 
 if __name__ == "__main__":
