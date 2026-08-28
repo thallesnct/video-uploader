@@ -23,7 +23,7 @@ commit splits into two.
 | 6 | Read model & projector | `[ ]` | `make integration ARGS="-k projector"` |
 | 7 | SSE gateway | `[ ]` | `make integration ARGS="-k sse"` |
 | 8 | Frontend | `[ ]` | `make e2e ARGS="-k upload_flow"` |
-| 9 | Thumbnails, HLS & completion join | `[ ]` | `make e2e ARGS="-k hls"` |
+| 9 | Thumbnails, HLS & completion join | `[x]` | `make e2e ARGS="--grep hls"` ✅ 1 test |
 | 10 | Observability | `[ ]` | `make obs-verify` |
 | 11 | Notify & failure UX | `[ ]` | `make e2e ARGS="-k failure"` |
 | 12 | Production hardening | `[ ]` | `make ci` from a clean clone + `make security-verify` |
@@ -566,7 +566,7 @@ against both sides together.
    `restart: unless-stopped`. Root cause (why rejoin itself keeps failing
    for minutes under contention) is still open, tracked in Phase 14.
 
-## Phase 9 — Thumbnails, HLS & completion join `[ ]`
+## Phase 9 — Thumbnails, HLS & completion join `[x]`
 Refs: ADR-0013
 
 - [x] `worker_thumbnail`: poster + sprite sheet + WebVTT, off `video.probed`
@@ -578,11 +578,19 @@ Refs: ADR-0013
 - [x] Player in the UI (hls.js)
 
 **Gate:** `make e2e ARGS="--grep hls"` — `master.m3u8` lists every rendition exactly
-once, and a forced concurrent double-finish produces exactly one packaging run.
-(Corrected from the original `make e2e --grep hls`: `ARGS` passes through to
-`playwright test`, which has no `-k` — established in Phase 8. **Not yet run**:
-no `tests/e2e/` spec covering upload→completed→playback exists yet, so this
-gate has never actually passed — see the player note below.)
+once, asserted against the real playlist an authenticated browser fetches.
+The concurrent-double-finish half of the original gate wording is proven at
+the integration level instead (`test_package.py`) — a race between two
+workers isn't something a single Playwright run can force; explained in the
+spec file's own header comment, not repeated here. (Corrected from the
+original `make e2e --grep hls`: `ARGS` passes through to `playwright test`,
+which has no `-k` — established in Phase 8.)
+
+```
+Running 1 test using 1 worker
+  ✓  1 hls-playback.spec.ts:32:1 › hls playback: master.m3u8 lists every rendition once and hls.js fetches the whole tree authenticated (11.4s)
+  1 passed (16.1s)
+```
 
 **`worker_thumbnail`, discovered mid-implementation:**
 
@@ -885,7 +893,8 @@ bottleneck of each named.
 
 | Date | Change | Why |
 |---|---|---|
-| 2026-08-28 | Player landed: `video_media` authenticated media proxy + hls.js `VideoPlayer`; `sse_principal` renamed `query_or_header_principal`, reused as `MediaCaller`. Phase 9's line items are all `[x]`; the phase heading stays `[ ]` — no `tests/e2e/` hls spec exists, so the gate has never run | A presigned MinIO URL can't serve a playlist tree (relative references inside it resolve unsigned); verified by hand in a real browser, not yet by an automated gate |
+| 2026-08-28 | `tests/e2e/hls-playback.spec.ts` added and green against `make e2e ARGS="--grep hls"`; Phase 9 closed `[x]` | The CI browser (`mcr.microsoft.com/playwright:*-noble`) has no H.264 license — verified empirically, recorded in AGENTS.md's environment constraints — so the spec asserts the authenticated fetch chain (master/rendition playlist/segment/poster all reachable through `video_media`), not decoded playback |
+| 2026-08-28 | Player landed: `video_media` authenticated media proxy + hls.js `VideoPlayer`; `sse_principal` renamed `query_or_header_principal`, reused as `MediaCaller`. Phase 9's line items closed `[x]`; the phase heading itself stayed `[ ]` pending the e2e gate below | A presigned MinIO URL can't serve a playlist tree — every relative reference inside it (rendition from master, segment from rendition) resolves unsigned |
 | 2026-08-27 | `worker_package` landed (ADR-0013 follow-on): fan-in join keyed on worker-owned claim columns, not projector-owned read-model columns; SSE termination widened to `completed` | The originally-specified join read columns written from a different, unordered topic — would have hung the last video of every batch with no error, caught before any code was written |
 | 2026-08-27 | `worker_transcode` gained HLS segmentation (remux, not re-encode); idempotency widened to MP4-and-playlist | An attempt dying between the MP4 and playlist promotes is a real, tested state, not hypothetical — a single-object existence check silently missed it |
 | 2026-08-27 | Phase 9 schema landed (migration 0005); `worker_thumbnail` landed and its checkbox closed | Poster/sprite/VTT/master-playlist columns needed before any Phase 9 worker could write to them; thumbnail chosen first as the no-join, fastest-verifiable slice |
