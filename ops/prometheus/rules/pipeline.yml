@@ -16,3 +16,32 @@ groups:
         labels: { severity: critical }
         annotations:
           summary: "Messages in {{ $labels.topic }} — a video failed terminally"
+
+      - alert: StageP99Regression
+        expr: histogram_quantile(0.99, sum by (le, stage) (rate(stage_duration_seconds_bucket[5m]))) > 300
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.stage }}'s p99 handling time has regressed past 300s"
+
+      # The ADR-0004 early warning: a message this close to max.poll.interval.ms
+      # (settings.py: 600_000ms = 600s) risks the consumer being evicted from
+      # its group before it finishes, which is the exact failure mode
+      # StageWorker's pause-and-heartbeat loop exists to prevent. 80% of the
+      # real limit, not the limit itself — the point is to catch it before
+      # the eviction, not after.
+      - alert: StageApproachingPollIntervalEviction
+        expr: stage_in_flight_seconds > 480
+        for: 0m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.stage }} has a message running {{ $value }}s — approaching the 600s max.poll.interval.ms eviction limit"
+
+      # 500 mirrors SSESettings.max_concurrent_streams (settings.py) — kept in
+      # sync by hand since Prometheus can't read the app's own config.
+      - alert: SSEConnectionsAtCap
+        expr: sse_connections_active >= 500
+        for: 1m
+        labels: { severity: warning }
+        annotations:
+          summary: "SSE connections at {{ $value }}, the concurrent-stream cap — new viewers are being refused a stream"
