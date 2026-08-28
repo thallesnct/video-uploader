@@ -102,5 +102,23 @@ class RetryPolicy:
 
 
 def source_topic_of(topic: str) -> str:
-    """Strip a retry suffix to recover the original topic name."""
-    return re.sub(r"\.retry\.\d+[smh]$", "", topic)
+    """Strip a retry or DLQ suffix to recover the original topic name.
+
+    Broadened from retry-suffix-only (Phase 5) to also strip `.dlq` (Phase
+    11's replay CLI needs "give me the original topic" from a DLQ topic name
+    the same way `_route_failure` already needs it from a retry-tier one) —
+    safe for every existing caller, since a retry-topic string never also
+    ends in `.dlq`.
+    """
+    topic = re.sub(r"\.retry\.\d+[smh]$", "", topic)
+    return re.sub(r"\.dlq$", "", topic)
+
+
+def tier_of(topic: str) -> str:
+    """The tier suffix of a retry-tier topic name (`"10s"` from
+    `"video.uploaded.retry.10s"`) — the retry pump's own use, to compute
+    how long a given message has left to wait via `tier_delay_seconds`."""
+    match = re.search(r"\.retry\.(\d+[smh])$", topic)
+    if not match:
+        raise ValueError(f"{topic!r} is not a retry-tier topic")
+    return match.group(1)

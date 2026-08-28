@@ -12,6 +12,7 @@ from pipeline.retry import (
     classify,
     source_topic_of,
     tier_delay_seconds,
+    tier_of,
 )
 
 POLICY = RetryPolicy(("10s", "1m", "10m"))
@@ -73,10 +74,28 @@ def test_hopeless_failures_skip_the_ladder(failure: FailureClass) -> None:
         ("rendition.requested.retry.10s", "rendition.requested"),
         ("rendition.requested.retry.10m", "rendition.requested"),
         ("video.status", "video.status"),
+        ("video.uploaded.dlq", "video.uploaded"),
     ],
 )
 def test_source_topic_is_recovered_from_a_retry_topic(topic: str, expected: str) -> None:
     assert source_topic_of(topic) == expected
+
+
+@pytest.mark.parametrize(
+    ("topic", "expected"),
+    [
+        ("video.uploaded.retry.10s", "10s"),
+        ("rendition.requested.retry.1m", "1m"),
+        ("rendition.requested.retry.10m", "10m"),
+    ],
+)
+def test_tier_is_extracted_from_a_retry_topic(topic: str, expected: str) -> None:
+    assert tier_of(topic) == expected
+
+
+def test_tier_of_rejects_a_non_retry_topic() -> None:
+    with pytest.raises(ValueError, match="not a retry-tier topic"):
+        tier_of("video.uploaded")
 
 
 def test_dlq_is_recognised() -> None:
