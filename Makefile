@@ -63,8 +63,10 @@ obs-up: .env ## Start the observability stack as well
 obs-down: ## Stop the observability stack, keep core services
 	$(DC_OBS) stop prometheus grafana tempo otel-collector kafka-exporter
 
-obs-verify: ## Dashboards provision, traces span all stages, lag panel live
-	@echo "not implemented until Phase 10" && exit 1
+obs-verify: up migrate obs-up ## Dashboards provision, traces span all stages, lag panel live
+	$(DC_OBS) --profile app up -d --build --wait
+	@$(MAKE) --no-print-directory $(E2E_FIXTURE)
+	@python3 infra/obs_verify.py
 
 unit: ## Fast tests, no I/O, no containers
 	$(RUN) pytest tests/unit $(ARGS)
