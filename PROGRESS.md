@@ -24,7 +24,7 @@ commit splits into two.
 | 7 | SSE gateway | `[ ]` | `make integration ARGS="-k sse"` |
 | 8 | Frontend | `[ ]` | `make e2e ARGS="-k upload_flow"` |
 | 9 | Thumbnails, HLS & completion join | `[x]` | `make e2e ARGS="--grep hls"` ✅ 1 test |
-| 10 | Observability | `[ ]` | `make obs-verify` |
+| 10 | Observability | `[x]` | `make obs-verify` ✅ passing |
 | 11 | Notify & failure UX | `[ ]` | `make e2e ARGS="-k failure"` |
 | 12 | Production hardening | `[ ]` | `make ci` from a clean clone + `make security-verify` |
 | 13 | Deployment | `[ ]` | `make deploy-staging && make e2e BASE_URL=<staging>` |
@@ -747,19 +747,93 @@ follow-on for the design decision itself):**
    both a new dependency (non-negotiable #9) that a test-environment gap
    doesn't justify.
 
-## Phase 10 — Observability `[ ]`
+## Phase 10 — Observability `[x]`
 Refs: ADR-0010
 
-- [ ] `/metrics` on api + every worker; Prometheus scrape config
-- [ ] `kafka-exporter` wired; consumer-lag panel per group
-- [ ] OTel spans in every stage, `traceparent` propagated via Kafka headers
-- [ ] Provisioned Grafana dashboards in `ops/grafana/`: pipeline throughput,
+- [x] `/metrics` on api + every worker; Prometheus scrape config
+- [x] `kafka-exporter` wired; consumer-lag panel per group
+- [x] OTel spans in every stage, `traceparent` propagated via Kafka headers
+- [x] Provisioned Grafana dashboards in `ops/grafana/`: pipeline throughput,
       stage latency histograms, consumer lag, failure/DLQ rate
-- [ ] Alert rules: lag over threshold, DLQ non-empty, stage p99 regression
+- [x] Alert rules: lag over threshold, DLQ non-empty, stage p99 regression
 
 **Gate:** `make obs-verify` — dashboards load from provisioning with no manual
 setup; one uploaded video yields a **single trace** spanning API → probe →
 transcode → package; the lag panel returns non-empty series.
+
+```
+driving one real upload through the stack
+  PASS  devauth issues a token
+  PASS  POST /videos
+  PASS  PUT fixture bytes to the presigned URL
+  PASS  POST /videos/{id}/complete
+  PASS  video reaches completed
+tracing (ADR-0010): one video, one trace, every stage
+  PASS  Tempo has at least one trace tagged video_id=b1fdf310-a1f5-44b2-a7ad-f986ee59fdbd
+  PASS  trace 11d0bca1d256d9e6b8edfebdd3ef4981 spans every required stage
+metrics: the lag panel has real data
+  PASS  kafka_consumergroup_lag_sum returns a non-empty series
+dashboards: provisioned with no manual setup
+  PASS  all four dashboards provisioned with no manual setup
+
+OBS-VERIFY PASSED — dashboards provisioned, one trace per video, lag panel is live
+```
+
+**Discovered mid-implementation — the checklist looked closer to done than it
+was.** `libs/pipeline/obs.py`/`health.py` already implemented most of
+ADR-0010 before this phase's first commit; reading the actual wiring (not
+just the checklist) found several silent gaps, not a blank slate:
+
+1. **`worker_transcode` never called `setup_tracing()`** — every other
+   service did. Its spans were created against the OTel SDK's default
+   no-op tracer provider, since nothing ever installed a real
+   `TracerProvider` in that process. The longest, most important stage was
+   invisible in every trace, silently — this is exactly what the phase's
+   gate is supposed to catch, and did, once the gate existed to run.
+2. **No span anywhere ever got `video_id` set as an attribute.** Trace
+   propagation itself already worked (Kafka header injection/extraction,
+   per-stage child spans) — there was just no way to ask Tempo for "the
+   trace for *this* video", the actual stated purpose of tracing in
+   ADR-0010. Fixed with one line per place a video_id becomes known
+   (`consumer.py`'s `_invoke_handler`, covering every `StageWorker`-based
+   service for free, plus each `api/main.py` route with a video_id).
+3. **`stage_in_flight_seconds` and `sse_connections_active` were both dead
+   metrics** — defined, registered, scraped, and always reporting `0`. The
+   first because `observe_stage`'s `finally` block unconditionally reset it
+   instead of ever reflecting real elapsed time; the second because nothing
+   ever called `.inc()`/`.dec()` on it. Neither would have been caught by
+   "does `/metrics` return 200" — both needed a real workload and someone
+   to check the actual values, which `obs_verify.py`'s real-upload-then-query
+   approach now does.
+4. **`sse_connections_active` is an unlabeled `Gauge` in a module shared by
+   every service** (`obs.py`), so every worker process registers it too,
+   always stuck at `0` since only the API route ever touches it. Caught
+   while verifying the Pipeline Overview dashboard's SSE panel against the
+   real running stack — it returned 6 series instead of 1. Fixed with
+   `job="api"` + `sum()` in the panel query; the metric itself is unchanged
+   (still process-global by construction).
+5. **`infra/obs_verify.py`'s first version picked the wrong trace** when
+   more than one request happened to tag the same `video_id` (every status
+   poll does). It guessed by reported trace duration, which doesn't
+   reliably reflect when the last async, Kafka-consumer-side span
+   finished. Fixed by fetching every candidate trace and picking whichever
+   one actually covers every required service, not the "longest" one.
+
+**Deliberately out of scope, documented rather than fixed:**
+`stage_duration_seconds`'s `rendition` label is always `"none"` in
+practice. `_invoke_handler` enters the metrics/span context *before*
+parsing the event (so it can time and record the parse itself as part of
+the stage's work), and the rendition isn't known until after parsing —
+threading it through would mean restructuring parse-error semantics (a
+parse failure currently still counts as a timed stage failure; moving
+parsing outside the context would change that). Not worth the behavioral
+risk for a label.
+
+The **Infrastructure** dashboard is honestly scoped: cAdvisor (container
+CPU/memory) isn't part of this dev compose stack, and adding it is a new
+dependency (non-negotiable #9) that a documentation phase doesn't justify
+on its own — the dashboard says so in its own text panel rather than
+shipping panels with permanently no data.
 
 ## Phase 11 — Notify & failure UX `[ ]`
 
@@ -900,6 +974,7 @@ bottleneck of each named.
 
 | Date | Change | Why |
 |---|---|---|
+| 2026-08-28 | Phase 10 closed `[x]`: `worker_transcode`'s missing tracer and the missing `video_id` span attribute fixed; manual ffmpeg/ffprobe spans and SQLAlchemy/botocore auto-instrumentation added; `stage_in_flight_seconds`/`sse_connections_active` (both previously dead metrics) fixed and wired; the four remaining ADR-0010 alerts added; four Grafana dashboards written and verified against the live stack; `make obs-verify` implemented and green | Most of ADR-0010's design was already scaffolded in `libs/pipeline/obs.py`/`health.py` before this phase's first commit — reading the actual wiring instead of the checklist found the gaps were in *using* it, not building it, and the most important one (transcode's spans being silent no-ops) is exactly the kind of thing that looks fine until the gate this phase adds actually checks |
 | 2026-08-28 | Documented, in `PLAN.md` (scope note near the top) and `PROGRESS.md` (Phase 13's assumption callout): this project is never deployed to a real/live environment — "production ready" is a demonstrated code/architecture standard by the end of development, not an operational target | User confirmed directly, after the server-side-cache discussion; needed to be in the repo itself (not just session memory) so it survives a cleared context or a new session, per the user's own ask |
 | 2026-08-28 | Decided **against** a server-side cache in front of `video_media` for now — no code change | No shared/public-video concept exists (ADR-0016: every video is single-owner, checked per request), so "many different clients hammering the same object" isn't a load pattern this app currently produces; the client-side `immutable` cache already covers the realistic case (same owner, repeat requests). A real shared cache/CDN would conflict with the per-request `Authorization` check as designed — a genuine redesign (signed per-segment URLs or an auth-aware CDN), ADR-worthy on its own if load evidence ever justifies it (Phase 12/14), not a quick patch now |
 | 2026-08-28 | `video_media` now sends `Cache-Control: private, max-age=31536000, immutable` on every response | It set no caching headers at all, so hls.js re-requesting a rendition it already fetched (its own buffer-flush behavior on every quality switch) round-tripped through MinIO every time — user-reported, seen live. Safe to cache indefinitely: every object this route serves is written once and never overwritten with different content, the same idempotency invariant `worker_transcode`/`worker_package` already rely on |
