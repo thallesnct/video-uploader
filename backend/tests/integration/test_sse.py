@@ -440,3 +440,53 @@ def test_the_sse_route_also_accepts_a_query_param_token(
 
     bad_token = client.get(f"/videos/{video_id}/events?access_token=not-a-real-token")
     assert bad_token.status_code == 401
+
+
+def test_sse_connections_active_returns_to_baseline_after_a_stream_closes(
+    environment: None,
+    kafka_bootstrap: str,
+    client: Any,
+    auth: Any,
+    sync_sessions_factory: Any,
+) -> None:
+    """sse_connections_active (ADR-0010) was defined but never wired to
+    anything — this proves the .dec() in counted_stream's finally actually
+    runs, not just that the route responds. TestClient buffers the whole
+    response before returning it (Phase 7, noted above), so the in-flight
+    peak isn't observable here; the net-zero after a terminal video's stream
+    closes on its own is what a forgotten .dec() would break."""
+    from prometheus_client import REGISTRY
+
+    def _sse_connections_active() -> float:
+        for family in REGISTRY.collect():
+            if family.name != "sse_connections_active":
+                continue
+            for sample in family.samples:
+                if sample.name == "sse_connections_active":
+                    return sample.value
+        raise AssertionError("sse_connections_active not registered")
+
+    before = _sse_connections_active()
+
+    resp = client.post(
+        "/videos",
+        json={"filename": "clip.mp4", "content_type": "video/mp4", "size_bytes": 256},
+        headers=auth(OWNER),
+    )
+    video_id = resp.json()["video_id"]
+    projector_handler(sync_sessions_factory)(
+        PipelineFailed(
+            video_id=uuid.UUID(video_id),
+            owner_id=OWNER,
+            producer="transcode",
+            stage="worker-transcode",
+            reason="TerminalError: unsupported codec",
+            terminal=True,
+        ),
+        _View(),
+    )
+
+    ok = client.get(f"/videos/{video_id}/events", headers=auth(OWNER))
+    assert ok.status_code == 200
+
+    assert _sse_connections_active() == before

@@ -24,7 +24,7 @@ from pipeline.auth import AuthError, Principal, TokenVerifier, bearer_token
 from pipeline.broadcast import StatusBroadcaster
 from pipeline.db import create_engine, session_scope, sessions
 from pipeline.events import VideoState, VideoStatusChanged, VideoUploaded
-from pipeline.obs import setup_tracing
+from pipeline.obs import SSE_CONNECTIONS, setup_tracing
 from pipeline.producer import AsyncEventProducer
 from pipeline.repository import VideoRepository
 from pipeline.settings import api_settings, observability_settings, quota_settings, sse_settings
@@ -494,6 +494,7 @@ async def video_events(
 
     async def counted_stream() -> AsyncIterator[dict[str, str]]:
         app.state.sse_active += 1
+        SSE_CONNECTIONS.inc()
         try:
             async for item in sse_stream(
                 app.state.sessions,
@@ -505,6 +506,7 @@ async def video_events(
                 yield item
         finally:
             app.state.sse_active -= 1
+            SSE_CONNECTIONS.dec()
 
     return EventSourceResponse(counted_stream(), ping=limits.ping_seconds)
 

@@ -17,7 +17,9 @@ from contextlib import contextmanager
 from time import perf_counter
 from typing import Any
 
-from prometheus_client import Counter, Gauge, Histogram
+from prometheus_client import REGISTRY, Counter, Gauge, Histogram
+from prometheus_client.core import GaugeMetricFamily
+from prometheus_client.registry import Collector
 
 from pipeline.settings import observability_settings
 
@@ -42,12 +44,32 @@ STAGE_IN_FLIGHT = Gauge(
     "Messages currently being handled",
     ["stage"],
 )
-STAGE_IN_FLIGHT_SECONDS = Gauge(
-    "stage_in_flight_seconds",
-    "Age of the oldest in-flight message. Alert when this approaches "
-    "max.poll.interval.ms — the early warning for the ADR-0004 eviction loop.",
-    ["stage"],
-)
+# A plain Gauge can't express "how long has this been running" without
+# something updating it on a timer — this is instead computed fresh at
+# scrape time, no background thread, no drift between updates and scrapes.
+# Keyed by stage, one entry per stage: safe because ADR-0004's pause-the-
+# whole-consumer design means a single StageWorker process only ever has
+# one message in flight at a time, so there's no "oldest of several" to
+# track, just "is one running, and since when".
+_stage_in_flight_started: dict[str, float] = {}
+
+
+class _StageInFlightSecondsCollector(Collector):
+    def collect(self) -> Iterator[GaugeMetricFamily]:
+        family = GaugeMetricFamily(
+            "stage_in_flight_seconds",
+            "Age of the oldest in-flight message. Alert when this approaches "
+            "max.poll.interval.ms — the early warning for the ADR-0004 eviction loop.",
+            labels=["stage"],
+        )
+        now = perf_counter()
+        for stage, started in _stage_in_flight_started.items():
+            family.add_metric([stage], now - started)
+        yield family
+
+
+REGISTRY.register(_StageInFlightSecondsCollector())
+
 TRANSCODE_REALTIME_RATIO = Histogram(
     "transcode_realtime_ratio",
     "Wall seconds per second of video — the number capacity planning actually needs",
@@ -72,6 +94,7 @@ def observe_stage(stage: str, rendition: str = "none") -> Iterator[None]:
     """Time one message's handling and record its outcome."""
     STAGE_IN_FLIGHT.labels(stage=stage).inc()
     started = perf_counter()
+    _stage_in_flight_started[stage] = started
     outcome = "ok"
     try:
         yield
@@ -80,7 +103,7 @@ def observe_stage(stage: str, rendition: str = "none") -> Iterator[None]:
         raise
     finally:
         STAGE_IN_FLIGHT.labels(stage=stage).dec()
-        STAGE_IN_FLIGHT_SECONDS.labels(stage=stage).set(0)
+        _stage_in_flight_started.pop(stage, None)
         STAGE_DURATION.labels(stage=stage, rendition=rendition, outcome=outcome).observe(
             perf_counter() - started
         )
