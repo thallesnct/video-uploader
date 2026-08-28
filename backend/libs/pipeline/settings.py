@@ -186,9 +186,32 @@ def observability_settings() -> ObservabilitySettings:
     return ObservabilitySettings()
 
 
+class NotifySettings(BaseSettings):
+    """worker_notify's webhook target (Phase 11).
+
+    No default for webhook_url — fails fast at startup if unset (ADR-0014's
+    12-factor config philosophy) rather than every video silently notifying
+    nowhere until someone happens to check.
+    """
+
+    model_config = SettingsConfigDict(**_CONFIG, env_prefix="NOTIFY_")
+
+    # Explicit alias, not just env_prefix: env_prefix alone resolves the env
+    # var correctly but the validation-error text on a missing var still
+    # names the bare field ("webhook_url"), not what an operator needs to
+    # set — same reason S3Settings.access_key carries one.
+    webhook_url: str = Field(validation_alias=AliasChoices("NOTIFY_WEBHOOK_URL"))
+    webhook_timeout_s: float = 10.0
+
+
 @lru_cache(maxsize=1)
 def sse_settings() -> SSESettings:
     return SSESettings()
+
+
+@lru_cache(maxsize=1)
+def notify_settings() -> NotifySettings:
+    return NotifySettings()  # type: ignore[call-arg]
 
 
 @lru_cache(maxsize=1)

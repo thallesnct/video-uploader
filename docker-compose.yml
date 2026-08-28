@@ -342,6 +342,40 @@ services:
       timeout: 5s
       retries: 10
 
+  # Second consumer group on video.completed/pipeline.failed alongside
+  # projector's — same events, independent offsets and lag (Phase 11,
+  # PLAN.md's "second consumer group" case). No DB/S3: a webhook is
+  # stateless from this side.
+  worker-notify:
+    build:
+      context: ./backend
+      dockerfile: services/worker_notify/Dockerfile
+      target: runtime
+    container_name: vp-worker-notify
+    restart: unless-stopped
+    profiles: ["app"]
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      NOTIFY_WEBHOOK_URL: ${NOTIFY_WEBHOOK_URL:-http://webhook-sink:9100/webhook}
+      NOTIFY_WEBHOOK_TIMEOUT_S: ${NOTIFY_WEBHOOK_TIMEOUT_S:-10.0}
+      SERVICE_NAME: worker-notify
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    depends_on:
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/healthz')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   # A stand-in for the external system worker-notify's webhook actually
   # targets (Phase 11) — "the webhook fires" is otherwise unobservable from
   # inside this stack. Test double, but a real hardened service like any

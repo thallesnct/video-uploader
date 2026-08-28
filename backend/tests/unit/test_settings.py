@@ -60,6 +60,16 @@ def test_database_url_is_required(monkeypatch: pytest.MonkeyPatch) -> None:
         settings.DatabaseSettings(**NO_ENV_FILE)
 
 
+def test_notify_webhook_url_is_required(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fails fast at startup (ADR-0014) rather than every video silently
+    notifying nowhere until someone happens to check."""
+    monkeypatch.delenv("NOTIFY_WEBHOOK_URL", raising=False)
+    with pytest.raises(ValidationError) as excinfo:
+        settings.NotifySettings(**NO_ENV_FILE)
+
+    assert "NOTIFY_WEBHOOK_URL" in str(excinfo.value)
+
+
 def test_kafka_defaults_encode_the_adr_0004_stance() -> None:
     resolved = settings.KafkaSettings(**NO_ENV_FILE)
 
