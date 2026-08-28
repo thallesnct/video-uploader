@@ -63,6 +63,22 @@ def test_a_rendition_playlist_and_a_segment_are_both_served(
     assert segment_resp.content == b"\x00" * 32
 
 
+def test_served_assets_are_cached_as_immutable(environment: None, client: Any, auth: Any) -> None:
+    """hls.js re-requests a rendition it already fetched on every quality
+    switch (its own buffer-flush behavior) — without this header, that
+    round-trips through MinIO every time even though the object can never
+    change once written (the same idempotency invariant worker_transcode/
+    worker_package already rely on: existence is done)."""
+    video_id = _create_video(client, auth)
+    store = object_store()
+    key = f"users/{OWNER}/videos/{video_id}/hls/master.m3u8"
+    store.client.put_object(Bucket=store.bucket, Key=key, Body=b"#EXTM3U\n")
+
+    resp = client.get(f"/videos/{video_id}/media/hls/master.m3u8", headers=auth(OWNER))
+
+    assert resp.headers["cache-control"] == "private, max-age=31536000, immutable"
+
+
 def test_a_missing_asset_is_not_found(environment: None, client: Any, auth: Any) -> None:
     video_id = _create_video(client, auth)
 

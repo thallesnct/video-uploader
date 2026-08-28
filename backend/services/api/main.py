@@ -384,6 +384,18 @@ _MEDIA_CONTENT_TYPES = {
     ".vtt": "text/vtt",
 }
 
+# Every object video_media serves is written exactly once and never
+# overwritten with different content — the same "object existence is the
+# idempotency check" invariant worker_transcode/worker_thumbnail/
+# worker_package already rely on. Safe to cache indefinitely: `private`
+# keeps it out of any shared/CDN cache (this is bearer-token-authorized,
+# per-owner content), `immutable` skips revalidation entirely rather than a
+# conditional-GET round trip on every reload. Without this, hls.js
+# re-requesting a rendition it already fetched (e.g. switching quality back
+# and forth) round-trips through this handler and MinIO every time, even
+# though the bytes it gets back can never differ.
+_MEDIA_CACHE_CONTROL = "private, max-age=31536000, immutable"
+
 
 @app.get("/videos/{video_id}/media/{path:path}")
 async def video_media(video_id: uuid.UUID, path: str, caller: MediaCaller) -> Response:
@@ -404,6 +416,12 @@ async def video_media(video_id: uuid.UUID, path: str, caller: MediaCaller) -> Re
     EventSource, with no way for our code to set a header on it — only the
     single flat poster-image request needs this, since a query string
     doesn't survive the relative-URL resolution a playlist tree depends on.
+
+    Every response carries `_MEDIA_CACHE_CONTROL`: hls.js re-requests a
+    rendition it has already fetched on every quality switch (its own
+    buffer-flush behavior, not something this route controls), and without
+    a cache hint that round-trips through MinIO every time even though the
+    object is immutable once written.
     """
     if ".." in path:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "asset not found")
@@ -431,7 +449,9 @@ async def video_media(video_id: uuid.UUID, path: str, caller: MediaCaller) -> Re
 
     extension = path[path.rfind(".") :] if "." in path else ""
     content_type = _MEDIA_CONTENT_TYPES.get(extension, "application/octet-stream")
-    return Response(content=body, media_type=content_type)
+    return Response(
+        content=body, media_type=content_type, headers={"Cache-Control": _MEDIA_CACHE_CONTROL}
+    )
 
 
 # --------------------------------------------------------------------- SSE
