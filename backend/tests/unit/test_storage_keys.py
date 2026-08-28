@@ -20,6 +20,7 @@ def every_key_for(owner: str) -> list[str]:
         storage.poster_key(owner, VIDEO),
         storage.sprite_key(owner, VIDEO),
         storage.sprite_vtt_key(owner, VIDEO),
+        storage.media_key(owner, VIDEO, "hls/master.m3u8"),
     ]
 
 
@@ -68,3 +69,21 @@ def test_renditions_do_not_collide() -> None:
 def test_key_builders_need_no_credentials() -> None:
     """Importing storage for key building must not require an S3 client."""
     assert storage.rendition_key(OWNER, VIDEO, "360p").endswith("renditions/360p.mp4")
+
+
+def test_media_key_for_the_master_playlist_path_matches_hls_master_key() -> None:
+    """The API's asset proxy derives keys generically from a URL path; this
+    must land on the exact same key the packager wrote to."""
+    assert storage.media_key(OWNER, VIDEO, "hls/master.m3u8") == storage.hls_master_key(
+        OWNER, VIDEO
+    )
+
+
+def test_media_key_for_a_rendition_playlist_path_matches_hls_playlist_key() -> None:
+    assert storage.media_key(OWNER, VIDEO, "hls/720p/playlist.m3u8") == storage.hls_playlist_key(
+        OWNER, VIDEO, "720p"
+    )
+
+
+def test_media_key_for_the_poster_path_matches_poster_key() -> None:
+    assert storage.media_key(OWNER, VIDEO, "thumbs/poster.jpg") == storage.poster_key(OWNER, VIDEO)

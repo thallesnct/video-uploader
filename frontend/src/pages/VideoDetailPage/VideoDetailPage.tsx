@@ -1,3 +1,4 @@
+import { Suspense, lazy } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, getRouteApi } from "@tanstack/react-router";
 import { getVideo } from "../../api/client";
@@ -5,6 +6,13 @@ import { useVideoEvents } from "../../hooks/useVideoEvents";
 import type { RenditionSnapshot, VideoResponse, VideoStatus } from "../../api/types";
 import { useRequiredSession } from "../../session";
 import styles from "./VideoDetailPage.module.css";
+
+// hls.js is ~250kB min+gzip and only ever needed on this one route, once a
+// video has actually finished — code-split it rather than pay that weight
+// on every page load.
+const VideoPlayer = lazy(() =>
+  import("../../components/VideoPlayer/VideoPlayer").then((m) => ({ default: m.VideoPlayer })),
+);
 
 const route = getRouteApi("/videos/$videoId");
 
@@ -73,6 +81,12 @@ export function VideoDetailPage() {
         <p className={styles.muted}>
           {v.width}×{v.height}, {v.duration_s.toFixed(1)}s
         </p>
+      )}
+
+      {v.status === "completed" && (
+        <Suspense fallback={<p className={styles.muted}>loading player…</p>}>
+          <VideoPlayer videoId={videoId} token={session.accessToken} />
+        </Suspense>
       )}
 
       {expected.length === 0 ? (

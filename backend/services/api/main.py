@@ -121,14 +121,17 @@ async def current_principal(
     return _verify_or_401(raw_token)
 
 
-async def sse_principal(
+async def query_or_header_principal(
     authorization: Annotated[str | None, Header()] = None,
     access_token: Annotated[str | None, Query()] = None,
 ) -> Principal:
-    """SSE-only: EventSource cannot set headers (ADR-0008 follow-on), so this
-    route alone also accepts the token as a query parameter. The header wins
-    when both are present; this is additive, not a weaker trust path — the
-    same TokenVerifier.verify() runs either way."""
+    """For routes a browser-native element hits without ever going through
+    `fetch`, so no code of ours gets to set a header: EventSource (ADR-0008
+    follow-on) and `<video poster>`/native `<img>`-style requests (Phase 9 —
+    `video_media`'s hls.js path still uses the header via `xhrSetup`; this is
+    for the single flat request a poster image is, not the nested playlist
+    tree). The header wins when both are present; this is additive, not a
+    weaker trust path — the same TokenVerifier.verify() runs either way."""
     if authorization:
         return await current_principal(authorization)
     if access_token:
@@ -141,7 +144,8 @@ async def sse_principal(
 
 
 Caller = Annotated[Principal, Depends(current_principal)]
-SSECaller = Annotated[Principal, Depends(sse_principal)]
+SSECaller = Annotated[Principal, Depends(query_or_header_principal)]
+MediaCaller = Annotated[Principal, Depends(query_or_header_principal)]
 
 
 # ----------------------------------------------------------------------- probes
@@ -371,6 +375,63 @@ async def get_video(video_id: uuid.UUID, caller: Caller) -> VideoResponse:
         # a 403 would confirm the id exists.
         raise HTTPException(status.HTTP_404_NOT_FOUND, "video not found")
     return to_response(row)
+
+
+_MEDIA_CONTENT_TYPES = {
+    ".m3u8": "application/vnd.apple.mpegurl",
+    ".ts": "video/mp2t",
+    ".jpg": "image/jpeg",
+    ".vtt": "text/vtt",
+}
+
+
+@app.get("/videos/{video_id}/media/{path:path}")
+async def video_media(video_id: uuid.UUID, path: str, caller: MediaCaller) -> Response:
+    """Proxies the video's own HLS playlists/segments and thumbnails.
+
+    Not a redirect to a presigned URL: hls.js resolves every relative
+    reference inside a playlist (a rendition playlist from the master, a
+    segment from a rendition playlist) against the URL it fetched that
+    playlist from. A presigned URL's signature only covers the exact key it
+    was signed for, so a relative fetch off of one arrives at MinIO with no
+    signature and is rejected — the whole tree has to be served from one
+    stable, authenticated origin instead, which this route is (hls.js's
+    `xhrSetup` attaches the bearer token to every request it makes, so the
+    same auth as every other endpoint here applies to segments too).
+
+    `MediaCaller` also accepts the token as an `access_token` query param
+    (not just the header): `<video poster>` is a native browser request like
+    EventSource, with no way for our code to set a header on it — only the
+    single flat poster-image request needs this, since a query string
+    doesn't survive the relative-URL resolution a playlist tree depends on.
+    """
+    if ".." in path:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "asset not found")
+
+    async with session_scope(app.state.sessions) as session:
+        row = await VideoRepository(session).get(caller.owner_id, video_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "video not found")
+
+    key = storage.media_key(caller.owner_id, video_id, path)
+    if not storage.owns(caller.owner_id, key):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "asset not found")
+
+    def _fetch() -> bytes | None:
+        try:
+            return app.state.store.client.get_object(Bucket=app.state.store.bucket, Key=key)[
+                "Body"
+            ].read()
+        except app.state.store.client.exceptions.NoSuchKey:
+            return None
+
+    body = await asyncio.to_thread(_fetch)
+    if body is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "asset not found")
+
+    extension = path[path.rfind(".") :] if "." in path else ""
+    content_type = _MEDIA_CONTENT_TYPES.get(extension, "application/octet-stream")
+    return Response(content=body, media_type=content_type)
 
 
 # --------------------------------------------------------------------- SSE

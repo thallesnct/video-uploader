@@ -17,6 +17,7 @@
   --color-warning-bg: #4b3f1f;
   --color-warning-fg: #ffd76f;
   --color-badge-bg: var(--color-border);
+  --color-video-bg: #000;
 
   --space-xs: 0.4rem;
   --space-sm: 0.5rem;

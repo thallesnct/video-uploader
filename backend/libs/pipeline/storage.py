@@ -68,6 +68,21 @@ def sprite_vtt_key(owner_id: str, video_id: UUID | str) -> str:
     return f"{video_prefix(owner_id, video_id)}/thumbs/sprite.vtt"
 
 
+def media_key(owner_id: str, video_id: UUID | str, path: str) -> str:
+    """A player-facing asset under this video's prefix — `hls/master.m3u8`,
+    `hls/360p/playlist.m3u8`, `hls/360p/seg000.ts`, `thumbs/poster.jpg`.
+
+    `path` is attacker-controlled (a URL path segment from the API's asset
+    route); the caller is responsible for rejecting `..` before this ever
+    runs (`services/api/main.py`'s `video_media` does). S3 keys are an opaque
+    flat namespace with no directory-traversal semantics, so a literal `..`
+    here can only ever miss (404), not escape the prefix — this check is
+    defense-in-depth, not the only thing standing between a client and
+    another tenant's objects.
+    """
+    return f"{video_prefix(owner_id, video_id)}/{path}"
+
+
 def owns(owner_id: str, key: str) -> bool:
     """Whether a key belongs to this owner.
 

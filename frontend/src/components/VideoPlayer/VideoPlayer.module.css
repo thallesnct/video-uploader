@@ -1,0 +1,14 @@
+.player {
+  width: 100%;
+  max-width: 100%;
+  border-radius: var(--radius-md);
+  background: var(--color-video-bg);
+}
+
+.unsupported {
+  color: var(--color-muted);
+  font-size: var(--font-size-md);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-lg);
+}
