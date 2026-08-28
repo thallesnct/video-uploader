@@ -24,6 +24,8 @@ from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any, Protocol
 
+from opentelemetry import trace
+
 from pipeline.events import Event, PipelineFailed, parse
 from pipeline.obs import (
     DLQ_MESSAGES,
@@ -312,6 +314,11 @@ class StageWorker:
             observe_stage(self.stage),
         ):
             event = parse(view.value)
+            # The only way to later ask Tempo "the trace for *this* video"
+            # (ADR-0010) rather than just "a trace exists for this stage" —
+            # video_id must never be a *metric* label (unbounded cardinality,
+            # same ADR), but a trace/log is exactly where it belongs.
+            trace.get_current_span().set_attribute("video_id", str(event.video_id))
             self._handler(event, view)
 
     def _route_failure(self, raw: Any, error: BaseException) -> None:

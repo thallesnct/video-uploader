@@ -17,6 +17,7 @@ from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
+from opentelemetry import trace
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor  # noqa: E402
 from pipeline import storage
 from pipeline.auth import AuthError, Principal, TokenVerifier, bearer_token
@@ -204,6 +205,7 @@ async def create_video(request: CreateVideoRequest, caller: Caller) -> CreateVid
         )
 
     video_id = uuid.uuid4()
+    trace.get_current_span().set_attribute("video_id", str(video_id))
     extension = ALLOWED_CONTENT_TYPES[request.content_type]
     object_key = storage.source_key(caller.owner_id, video_id, extension)
 
@@ -251,6 +253,7 @@ async def create_video(request: CreateVideoRequest, caller: Caller) -> CreateVid
 @app.post("/videos/{video_id}/complete")
 async def complete_upload(video_id: uuid.UUID, caller: Caller) -> VideoResponse:
     """Verify the object landed, then publish video.uploaded exactly once."""
+    trace.get_current_span().set_attribute("video_id", str(video_id))
     async with session_scope(app.state.sessions) as session:
         repository = VideoRepository(session)
         row = await repository.get(caller.owner_id, video_id)
@@ -368,6 +371,7 @@ async def cancel_video(video_id: uuid.UUID, caller: Caller) -> Response:
 
 @app.get("/videos/{video_id}")
 async def get_video(video_id: uuid.UUID, caller: Caller) -> VideoResponse:
+    trace.get_current_span().set_attribute("video_id", str(video_id))
     async with session_scope(app.state.sessions) as session:
         row = await VideoRepository(session).get(caller.owner_id, video_id)
     if row is None:
@@ -423,6 +427,7 @@ async def video_media(video_id: uuid.UUID, path: str, caller: MediaCaller) -> Re
     a cache hint that round-trips through MinIO every time even though the
     object is immutable once written.
     """
+    trace.get_current_span().set_attribute("video_id", str(video_id))
     if ".." in path:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "asset not found")
 
@@ -475,6 +480,7 @@ async def video_events(
     one. counted_stream's try/finally is what guarantees the decrement runs
     even if the client never reads a byte.
     """
+    trace.get_current_span().set_attribute("video_id", str(video_id))
     limits = sse_settings()
     if app.state.sse_active >= limits.max_concurrent_streams:
         raise HTTPException(

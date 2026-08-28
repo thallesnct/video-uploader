@@ -39,7 +39,7 @@ from pipeline.events import (
 )
 from pipeline.health import HealthRegistry, serve_health
 from pipeline.hls import HlsResult, generate_hls
-from pipeline.obs import TRANSCODE_REALTIME_RATIO
+from pipeline.obs import TRANSCODE_REALTIME_RATIO, setup_tracing
 from pipeline.producer import EventProducer
 from pipeline.repository import RenditionRepository
 from pipeline.retry import RetryPolicy, TransientError
@@ -236,6 +236,7 @@ def main() -> None:
     from confluent_kafka import Consumer
 
     logging.basicConfig(level=observability_settings().log_level)
+    setup_tracing(SERVICE)
 
     store = object_store()
     producer = EventProducer(service=SERVICE)
