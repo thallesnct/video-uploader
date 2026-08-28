@@ -58,6 +58,16 @@ def test_audio_codec_is_always_present() -> None:
     assert "-c:a" in argv
 
 
+def test_threads_is_capped_by_default_and_overridable() -> None:
+    """ADR-0015 §1 containment: ffmpeg must not default to detecting the
+    host's full core count inside a resource-limited container."""
+    default_argv = build_argv("in.mp4", "out.mp4", "360p")
+    assert default_argv[default_argv.index("-threads") + 1] == "2"
+
+    custom_argv = build_argv("in.mp4", "out.mp4", "360p", threads=4)
+    assert custom_argv[custom_argv.index("-threads") + 1] == "4"
+
+
 def test_timeout_budget_has_a_floor_for_very_short_clips() -> None:
     assert timeout_budget_s(2.0) == 120.0
 

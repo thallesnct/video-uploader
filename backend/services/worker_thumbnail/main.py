@@ -34,7 +34,7 @@ from pipeline.obs import setup_tracing
 from pipeline.producer import EventProducer
 from pipeline.retry import RetryPolicy, TerminalError, TransientError
 from pipeline.runner import run_worker
-from pipeline.settings import observability_settings
+from pipeline.settings import ffmpeg_settings, observability_settings
 from pipeline.storage import ObjectStore, object_store, poster_key, scratch_key
 from pipeline.storage import sprite_key as sprite_key_for
 from pipeline.storage import sprite_vtt_key as vtt_key_for
@@ -87,14 +87,19 @@ def build_handler(
             store.download(event.source_key, local_source)
 
             local_poster = os.path.join(scratch, "poster.jpg")
-            poster_fn(local_source, local_poster, duration_s=event.duration_s)
+            poster_fn(
+                local_source,
+                local_poster,
+                duration_s=event.duration_s,
+                threads=ffmpeg_settings().threads,
+            )
             remote_poster = scratch_key(event.owner_id, event.video_id, "poster.jpg.part")
             store.upload(local_poster, remote_poster, content_type="image/jpeg")
             store.promote(remote_poster, final_poster)
 
             layout = plan_sprite(event.duration_s)
             local_sprite = os.path.join(scratch, "sprite.jpg")
-            sprite_fn(local_source, local_sprite, layout)
+            sprite_fn(local_source, local_sprite, layout, threads=ffmpeg_settings().threads)
             remote_sprite = scratch_key(event.owner_id, event.video_id, "sprite.jpg.part")
             store.upload(local_sprite, remote_sprite, content_type="image/jpeg")
             store.promote(remote_sprite, final_sprite)

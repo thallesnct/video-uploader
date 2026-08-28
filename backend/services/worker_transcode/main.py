@@ -44,7 +44,7 @@ from pipeline.producer import EventProducer
 from pipeline.repository import RenditionRepository
 from pipeline.retry import RetryPolicy, TransientError
 from pipeline.runner import run_worker
-from pipeline.settings import observability_settings
+from pipeline.settings import ffmpeg_settings, observability_settings
 from pipeline.storage import (
     ObjectStore,
     hls_playlist_key,
@@ -127,6 +127,7 @@ def build_handler(
                     local_output,
                     event.rendition,
                     timeout_s=timeout_budget_s(event.duration_s),
+                    threads=ffmpeg_settings().threads,
                 )
                 elapsed = time.monotonic() - started
 

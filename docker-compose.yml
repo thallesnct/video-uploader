@@ -1,5 +1,22 @@
 # Development stack. The hardened production profile is Phase 13 (ADR-0015);
-# this file deliberately runs a relaxed configuration for local work.
+# this file deliberately runs a relaxed configuration for local work — though
+# less relaxed than that framing suggests: non-root/read-only-rootfs/
+# cap_drop:ALL/no-new-privileges and (Phase 12) per-worker cpus/mem_limit and
+# stop_grace_period are already on every worker below, not deferred.
+#
+# Seccomp (ADR-0015 §1, Phase 12): every service below runs under Docker's
+# *default* seccomp profile, not a custom one — a deliberate decision, not an
+# oversight. The default profile already blocks the dangerous syscall classes
+# (ptrace, kernel module loading, raw sockets, mount, etc.); a custom profile
+# narrower than that is a real, easy-to-get-wrong undertaking (enumerating
+# every syscall glibc/ffmpeg/librdkafka/psycopg genuinely need, then keeping
+# that list correct across every dependency upgrade) that a project with no
+# live deployment target doesn't get to spend that engineering budget on.
+# cap_drop:ALL/read-only rootfs/non-root, plus the no-egress network
+# isolation this same phase adds for make security-verify's egress check,
+# already cover the realistic threat from a compromised ffmpeg process; a
+# custom seccomp profile is this repo's named upgrade path
+# if that threat model ever changes, not a silently-skipped checklist item.
 name: video-pipeline
 
 services:
@@ -169,6 +186,13 @@ services:
       target: runtime
     container_name: vp-worker-probe
     restart: unless-stopped
+    # Sized from a real run, not guessed (Phase 12): docker stats during an
+    # actual upload peaked at ~82MiB / <10% CPU (ffprobe is a cheap read, no
+    # encode). 1 CPU / 256m gives real headroom for a longer/larger source
+    # while still bounding a hostile file's ability to consume host resources
+    # (ADR-0015 §1).
+    cpus: "1"
+    mem_limit: 256m
     # Default 10s isn't quite enough: a real SIGTERM proof this phase (kill
     # -s SIGTERM against a live container) measured ~8s just for the
     # consumer's own clean group-leave (LeaveGroupRequest), before any
@@ -214,6 +238,16 @@ services:
       target: runtime
     container_name: vp-worker-transcode
     restart: unless-stopped
+    # Sized from a real run, not guessed (Phase 12): docker stats during an
+    # actual transcode peaked at ~154MiB / ~73% of one core against the
+    # 2-second test fixture (real content will use more of both). cpus
+    # matches FFMPEG_THREADS' own default (2) so the cgroup limit and
+    # ffmpeg's own thread count agree — a mismatch either wastes threads
+    # that get throttled or leaves the limit looser than the cap suggests.
+    # 1g memory gives ~6x headroom over the observed baseline for a real
+    # source (ADR-0015 §1).
+    cpus: "2"
+    mem_limit: 1g
     # The one worker where this actually matters (ADR-0015 §4: "grace period
     # above the p99 rendition time"): timeout_budget_s's own floor is 120s,
     # and real sources scale past it (source_duration_s * 8). 180s clears
@@ -259,6 +293,12 @@ services:
       target: runtime
     container_name: vp-worker-thumbnail
     restart: unless-stopped
+    # Sized from a real run, not guessed (Phase 12): docker stats during
+    # actual poster+sprite generation peaked at ~88MiB / ~70% of one core
+    # against the 2-second test fixture. cpus matches FFMPEG_THREADS' own
+    # default for the same reason worker-transcode's does.
+    cpus: "2"
+    mem_limit: 512m
     # See worker-probe's comment: ~8s group-leave overhead measured live,
     # plus this worker's longest single ffmpeg call (60s, sprite sheet).
     stop_grace_period: 75s
@@ -297,6 +337,11 @@ services:
       target: runtime
     container_name: vp-projector
     restart: unless-stopped
+    # Sized from a real run, not guessed (Phase 12): docker stats during
+    # actual traffic showed ~71MiB / <2% CPU — no ffmpeg, a plain DB write
+    # per message. 256m/1 CPU is generous headroom, not a tight fit.
+    cpus: "1"
+    mem_limit: 256m
     # See worker-probe's comment for where the ~8s group-leave overhead
     # comes from. No ffmpeg call on this path at all — a plain DB write per
     # message — so the default 30s floor used elsewhere is already generous.
@@ -332,7 +377,10 @@ services:
       target: runtime
     container_name: vp-worker-package
     restart: unless-stopped
-    # See projector's comment — a master.m3u8 write is fast, no ffmpeg here.
+    # See projector's comment: ~91MiB / <1% CPU observed, a master.m3u8
+    # write is fast, no ffmpeg here.
+    cpus: "1"
+    mem_limit: 256m
     stop_grace_period: 30s
     profiles: ["app"]
     environment:
@@ -375,7 +423,10 @@ services:
       target: runtime
     container_name: vp-worker-notify
     restart: unless-stopped
-    # See projector's comment — one HTTP POST, no ffmpeg here.
+    # See projector's comment: ~61MiB / ~6% CPU observed, one HTTP POST,
+    # no ffmpeg here.
+    cpus: "1"
+    mem_limit: 256m
     stop_grace_period: 30s
     profiles: ["app"]
     environment:
@@ -411,6 +462,10 @@ services:
       target: runtime
     container_name: vp-worker-retry-pump
     restart: unless-stopped
+    # See projector's comment: ~61MiB / <1% CPU observed, mostly time.sleep,
+    # no ffmpeg here.
+    cpus: "1"
+    mem_limit: 256m
     # Named, accepted limitation, not silently glossed over (same framing
     # this service's own main.py already uses for its one-message-at-a-time
     # design): the handler can legitimately time.sleep() up to a tier's own

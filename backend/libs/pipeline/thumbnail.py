@@ -37,13 +37,17 @@ def poster_timestamp_s(duration_s: float) -> float:
     return min(duration_s * 0.1, duration_s - 0.5)
 
 
-def build_poster_argv(source: str, destination: str, timestamp_s: float) -> list[str]:
+def build_poster_argv(
+    source: str, destination: str, timestamp_s: float, *, threads: int = 2
+) -> list[str]:
     return [
         FFMPEG,
         "-y",
         "-hide_banner",
         "-loglevel",
         "error",
+        "-threads",
+        str(threads),
         "-ss",
         f"{timestamp_s:.3f}",
         "-i",
@@ -106,7 +110,9 @@ def plan_sprite(duration_s: float, interval_s: float = DEFAULT_INTERVAL_S) -> Sp
     return SpriteLayout(count=count, columns=columns, rows=rows, interval_s=effective_interval_s)
 
 
-def build_sprite_argv(source: str, destination: str, layout: SpriteLayout) -> list[str]:
+def build_sprite_argv(
+    source: str, destination: str, layout: SpriteLayout, *, threads: int = 2
+) -> list[str]:
     """One image containing `layout.columns` x `layout.rows` tiles, sampled
     every `layout.interval_s` seconds. `-frames:v 1` caps ffmpeg's tile filter
     to exactly one full grid — later-sampled frames beyond columns*rows are
@@ -124,6 +130,8 @@ def build_sprite_argv(source: str, destination: str, layout: SpriteLayout) -> li
         "-hide_banner",
         "-loglevel",
         "error",
+        "-threads",
+        str(threads),
         "-i",
         source,
         "-vf",
@@ -174,16 +182,26 @@ def build_vtt(layout: SpriteLayout, sprite_key: str, duration_s: float) -> str:
 
 
 def generate_poster(
-    source: str, destination: str, *, duration_s: float, timeout_s: float = 30.0
+    source: str,
+    destination: str,
+    *,
+    duration_s: float,
+    timeout_s: float = 30.0,
+    threads: int = 2,
 ) -> None:
-    argv = build_poster_argv(source, destination, poster_timestamp_s(duration_s))
+    argv = build_poster_argv(source, destination, poster_timestamp_s(duration_s), threads=threads)
     _run(argv, destination, timeout_s=timeout_s, label="poster")
 
 
 def generate_sprite(
-    source: str, destination: str, layout: SpriteLayout, *, timeout_s: float = 60.0
+    source: str,
+    destination: str,
+    layout: SpriteLayout,
+    *,
+    timeout_s: float = 60.0,
+    threads: int = 2,
 ) -> None:
-    argv = build_sprite_argv(source, destination, layout)
+    argv = build_sprite_argv(source, destination, layout, threads=threads)
     _run(argv, destination, timeout_s=timeout_s, label="sprite")
 
 

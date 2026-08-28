@@ -131,7 +131,7 @@ def test_transcode_publishes_completion_and_writes_the_object(
     invocations: list[str] = []
 
     def fake_transcode(
-        source: str, destination: str, rendition: str, *, timeout_s: float
+        source: str, destination: str, rendition: str, *, timeout_s: float, threads: int = 2
     ) -> TranscodeResult:
         invocations.append(rendition)
         with open(destination, "wb") as handle:
@@ -218,7 +218,7 @@ def test_a_transcode_longer_than_the_poll_interval_survives_without_eviction(
     invocation_count = 0
 
     def slow_transcode(
-        source: str, destination: str, rendition: str, *, timeout_s: float
+        source: str, destination: str, rendition: str, *, timeout_s: float, threads: int = 2
     ) -> TranscodeResult:
         nonlocal invocation_count
         invocation_count += 1
@@ -314,7 +314,7 @@ def test_a_redelivered_message_produces_one_object_and_one_db_row(
     hls_invocations = 0
 
     def fake_transcode(
-        source: str, destination: str, rendition: str, *, timeout_s: float
+        source: str, destination: str, rendition: str, *, timeout_s: float, threads: int = 2
     ) -> TranscodeResult:
         invocations.append(rendition)
         with open(destination, "wb") as handle:
@@ -383,7 +383,7 @@ def test_an_mp4_with_no_playlist_is_remuxed_without_reclaiming_or_re_encoding(
     transcode_invocations: list[str] = []
 
     def fake_transcode(
-        source: str, destination: str, rendition: str, *, timeout_s: float
+        source: str, destination: str, rendition: str, *, timeout_s: float, threads: int = 2
     ) -> TranscodeResult:
         transcode_invocations.append(rendition)
         with open(destination, "wb") as handle:
@@ -430,7 +430,7 @@ def test_a_terminal_failure_lands_in_the_dlq_with_reason_and_pipeline_failed(
     target_key = f"users/{OWNER}/videos/{video_id}/renditions/360p.mp4"
 
     def broken_transcode(
-        source: str, destination: str, rendition: str, *, timeout_s: float
+        source: str, destination: str, rendition: str, *, timeout_s: float, threads: int = 2
     ) -> TranscodeResult:
         raise TerminalError("simulated corrupt input — unsupported codec")
 

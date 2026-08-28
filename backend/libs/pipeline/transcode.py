@@ -54,7 +54,7 @@ def bitrate_for(rendition: str) -> int:
     return round(_BITRATE_KBPS[lower] + weight * (_BITRATE_KBPS[upper] - _BITRATE_KBPS[lower]))
 
 
-def build_argv(source: str, destination: str, rendition: str) -> list[str]:
+def build_argv(source: str, destination: str, rendition: str, *, threads: int = 2) -> list[str]:
     """The ffmpeg invocation for one rendition.
 
     Scales to the rendition's height, preserving aspect ratio (width computed
@@ -65,6 +65,10 @@ def build_argv(source: str, destination: str, rendition: str) -> list[str]:
     audio codec option when the source has no audio stream to encode (exit 0,
     output simply carries no audio track) — there is nothing to make
     conditional.
+
+    `threads` caps ffmpeg's own thread count (ADR-0015 §1 containment) —
+    defaults to FfmpegSettings' own default so a caller that doesn't pass one
+    still gets the capped behavior, not ffmpeg's "detect every host core".
     """
     height = _rung(rendition)
     kbps = bitrate_for(rendition)
@@ -74,6 +78,8 @@ def build_argv(source: str, destination: str, rendition: str) -> list[str]:
         "-hide_banner",
         "-loglevel",
         "error",
+        "-threads",
+        str(threads),
         "-i",
         source,
         "-vf",
@@ -109,11 +115,12 @@ def transcode(
     rendition: str,
     *,
     timeout_s: float,
+    threads: int = 2,
 ) -> TranscodeResult:
     """Run the transcode. Raises TerminalError on any ffmpeg failure — a
     transcode that fails on valid input from a successfully-probed source is
     not something a retry can fix (ADR-0005)."""
-    argv = build_argv(source, destination, rendition)
+    argv = build_argv(source, destination, rendition, threads=threads)
     try:
         with tracer().start_as_current_span("ffmpeg") as span:
             span.set_attribute("rendition", rendition)

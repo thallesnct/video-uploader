@@ -30,6 +30,10 @@ def build_hls_argv(
     *,
     segment_seconds: int = DEFAULT_SEGMENT_SECONDS,
 ) -> list[str]:
+    # No -threads cap here, deliberately (unlike transcode.py/thumbnail.py's
+    # builders, ADR-0015 §1): -c copy is a stream remux, not a decode/encode
+    # pass — there is no worker thread pool for -threads to bound, so it
+    # would be a no-op flag, not a real containment measure.
     return [
         FFMPEG,
         "-y",

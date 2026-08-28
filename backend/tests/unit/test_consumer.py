@@ -45,6 +45,18 @@ def build(consumer: FakeConsumer, handler, producer: FakeProducer | None = None)
     )
 
 
+def test_the_handler_executor_is_capped_at_one_worker() -> None:
+    """Phase 12's 'backpressure / concurrency caps per worker' checklist
+    item is mostly already true by construction, not new work: one message
+    at a time per StageWorker is ADR-0004's whole design (the real
+    concurrency ceiling is partition count x replica count, Kafka's own
+    backpressure). This asserts the guarantee directly rather than only
+    inferring it from run()'s own sequential loop, which would look
+    identical whether or not the executor itself enforced it."""
+    worker = build(FakeConsumer([]), lambda event, view: None)
+    assert worker._executor._max_workers == 1  # noqa: SLF001
+
+
 def test_partitions_are_paused_before_the_handler_runs() -> None:
     consumer = FakeConsumer([a_message()])
     observed: list[bool] = []

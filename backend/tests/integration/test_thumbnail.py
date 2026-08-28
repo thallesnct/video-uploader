@@ -65,12 +65,12 @@ def a_probe(video_id: uuid.UUID, duration_s: float = 12.0) -> VideoProbed:
     )
 
 
-def _fake_poster(source: str, destination: str, *, duration_s: float) -> None:
+def _fake_poster(source: str, destination: str, *, duration_s: float, threads: int = 2) -> None:
     with open(destination, "wb") as handle:
         handle.write(b"\xff" * 128)
 
 
-def _fake_sprite(source: str, destination: str, layout: Any) -> None:
+def _fake_sprite(source: str, destination: str, layout: Any, *, threads: int = 2) -> None:
     with open(destination, "wb") as handle:
         handle.write(b"\xfe" * 256)
 
@@ -141,7 +141,9 @@ def test_a_redelivered_message_does_not_regenerate(environment: None) -> None:
 
     invocations: list[str] = []
 
-    def counting_poster(source: str, destination: str, *, duration_s: float) -> None:
+    def counting_poster(
+        source: str, destination: str, *, duration_s: float, threads: int = 2
+    ) -> None:
         invocations.append("poster")
         _fake_poster(source, destination, duration_s=duration_s)
 
@@ -182,7 +184,9 @@ def test_a_terminal_failure_lands_in_the_dlq_with_reason(
         Body=b"\x00" * 256,
     )
 
-    def broken_poster(source: str, destination: str, *, duration_s: float) -> None:
+    def broken_poster(
+        source: str, destination: str, *, duration_s: float, threads: int = 2
+    ) -> None:
         raise TerminalError("simulated corrupt input — no video stream")
 
     from confluent_kafka import Consumer

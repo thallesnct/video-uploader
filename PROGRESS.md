@@ -1000,12 +1000,24 @@ Refs: ADR-0015
 
 - [x] Graceful SIGTERM shutdown everywhere: stop consuming, finish or cleanly
       abort in-flight work, commit offsets, flush producer, close
-- [ ] **Media-worker containment** — non-root, read-only rootfs + tmpfs scratch,
+- [~] **Media-worker containment** — non-root, read-only rootfs + tmpfs scratch,
       `cap-drop ALL`, `no-new-privileges`, seccomp, no network egress beyond
-      Kafka/S3/Postgres, CPU/memory/wall-clock limits, ffmpeg `-threads` cap
+      Kafka/S3/Postgres, CPU/memory/wall-clock limits, ffmpeg `-threads` cap.
+      Everything but network egress landed: non-root/read-only/cap-drop/
+      no-new-privileges were already true from earlier phases; wall-clock
+      timeouts already existed per ffmpeg call; this item added `FFMPEG_THREADS`
+      (capped at 2, threaded through transcode/thumbnail's argv builders —
+      hls.py's `-c copy` remux deliberately excluded, no decode/encode for
+      `-threads` to bound), per-worker `cpus`/`mem_limit` in compose sized from
+      real `docker stats` numbers during an actual upload (not guessed), and an
+      explicit documented decision to use Docker's default seccomp profile
+      rather than author a custom one (a real, easy-to-get-wrong undertaking
+      disproportionate to a project with no live deployment target). Network
+      egress restriction is item 13's `make security-verify` egress check,
+      not done yet.
 - [x] Input allow-list from ffprobe before transcoding; no `shell=True` anywhere;
       filenames derived from `video_id`, never from the uploaded name
-- [ ] Backpressure / concurrency caps per worker; resource limits in compose
+- [x] Backpressure / concurrency caps per worker; resource limits in compose
 - [ ] Kafka prod profile: RF=3, `min.insync.replicas=2`, `acks=all`, no unclean
       leader election, auto-create off, TLS+SASL, per-topic retention
 - [ ] Prometheus multiprocess mode wired in the API entrypoint (ADR-0014 gotcha)

@@ -204,6 +204,17 @@ class NotifySettings(BaseSettings):
     webhook_timeout_s: float = 10.0
 
 
+class FfmpegSettings(BaseSettings):
+    """ADR-0015 §1 media-worker containment: cap ffmpeg's own thread count
+    rather than letting it default to detecting the host's full core count,
+    which is meaningless (and wasteful — threads beyond the container's own
+    `cpus:` limit just get throttled) inside a resource-limited container."""
+
+    model_config = SettingsConfigDict(**_CONFIG, env_prefix="FFMPEG_")
+
+    threads: int = 2
+
+
 @lru_cache(maxsize=1)
 def sse_settings() -> SSESettings:
     return SSESettings()
@@ -212,6 +223,11 @@ def sse_settings() -> SSESettings:
 @lru_cache(maxsize=1)
 def notify_settings() -> NotifySettings:
     return NotifySettings()  # type: ignore[call-arg]
+
+
+@lru_cache(maxsize=1)
+def ffmpeg_settings() -> FfmpegSettings:
+    return FfmpegSettings()
 
 
 @lru_cache(maxsize=1)

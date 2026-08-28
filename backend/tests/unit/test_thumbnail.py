@@ -84,6 +84,20 @@ def test_sprite_argv_samples_at_the_layout_interval_and_tiles_the_grid() -> None
     assert argv[-1] == "out.jpg"
 
 
+def test_poster_and_sprite_threads_are_capped_by_default_and_overridable() -> None:
+    """ADR-0015 §1 containment, same reasoning as transcode's own cap."""
+    layout = SpriteLayout(count=1, columns=1, rows=1, interval_s=5.0)
+
+    poster_argv = build_poster_argv("in.mp4", "out.jpg", 1.0)
+    assert poster_argv[poster_argv.index("-threads") + 1] == "2"
+
+    custom_poster_argv = build_poster_argv("in.mp4", "out.jpg", 1.0, threads=4)
+    assert custom_poster_argv[custom_poster_argv.index("-threads") + 1] == "4"
+
+    sprite_argv = build_sprite_argv("in.mp4", "out.jpg", layout)
+    assert sprite_argv[sprite_argv.index("-threads") + 1] == "2"
+
+
 def test_vtt_starts_with_the_webvtt_header() -> None:
     layout = SpriteLayout(count=1, columns=1, rows=1, interval_s=5.0)
     vtt = build_vtt(layout, "sprite.jpg", duration_s=3.0)
