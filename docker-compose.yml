@@ -305,6 +305,43 @@ services:
       timeout: 5s
       retries: 10
 
+  worker-package:
+    build:
+      context: ./backend
+      dockerfile: services/worker_package/Dockerfile
+      target: runtime
+    container_name: vp-worker-package
+    restart: unless-stopped
+    profiles: ["app"]
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      S3_BUCKET: ${S3_BUCKET}
+      SERVICE_NAME: worker-package
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/healthz')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   # e2e-only: profiles keeps it out of plain `make up`. Not given the
   # ADR-0015 hardening the backend services get (read_only, tmpfs, cap_drop)
   # — it's test tooling that never runs in prod, not a deployed component,

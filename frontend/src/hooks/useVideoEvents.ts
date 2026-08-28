@@ -16,12 +16,13 @@ const MAX_BACKOFF_MS = 15_000;
  *    401 (expired/bad token) and a network blip look identical from `onerror`.
  *    The only way to tell them apart is a real fetch — ADR-0008's follow-on
  *    documents the 401-is-fatal contract this implements.
- * 2. A server-initiated close (the video reached `failed`, ADR-0008) is
- *    itself indistinguishable from a dropped connection to EventSource, which
- *    auto-reconnects even after a *clean* close — PROGRESS.md's Phase 7/8
- *    cross-phase contract note. The "failed" handler below calls `.close()`
- *    itself so a terminal video doesn't loop forever re-fetching a snapshot
- *    that will never change.
+ * 2. A server-initiated close (the video reached `failed` or `completed`,
+ *    ADR-0008) is itself indistinguishable from a dropped connection to
+ *    EventSource, which auto-reconnects even after a *clean* close —
+ *    PROGRESS.md's Phase 7/8/9 cross-phase contract note. The "failed"
+ *    handler and the "status" handler's completed branch below both call
+ *    `.close()` themselves so a terminal video doesn't loop forever
+ *    re-fetching a snapshot that will never change.
  */
 export function useVideoEvents(
   videoId: string,
@@ -71,6 +72,15 @@ export function useVideoEvents(
       es.addEventListener("status", (event) => {
         const payload = JSON.parse((event as MessageEvent).data) as { state: VideoResponse["status"] };
         applyVideoPatch({ status: payload.state });
+        // completed is terminal too (ADR-0008 follow-on, same reasoning as
+        // "failed" below): without this, EventSource auto-reconnects even
+        // after the server's clean close, re-fetching a snapshot that will
+        // never change again.
+        if (payload.state === "completed") {
+          closedForGood = true;
+          es?.close();
+          setState("closed");
+        }
       });
 
       es.addEventListener("probed", (event) => {

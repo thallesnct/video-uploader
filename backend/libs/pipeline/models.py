@@ -61,6 +61,16 @@ class VideoRow(Base):
     # yet" — `status` already distinguishes that from "packaging in progress".
     master_playlist_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
 
+    # --- CLAIM: worker_package-owned (ADR-0013 follow-on). Deliberately
+    # duplicates expected_renditions above — worker_package must never read
+    # that column, since it is written from a different topic (video.status)
+    # than the one it consumes (video.probed), with no ordering guarantee
+    # between them. ---
+    packager_expected_renditions: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    packaging_claimed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     failure_reason: Mapped[str | None] = mapped_column(String(1024), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
@@ -82,16 +92,20 @@ class VideoRow(Base):
 
 
 class RenditionRow(Base):
-    """Two column groups, two owners (ADR-0007's column-ownership rule):
+    """Three column groups, three owners (ADR-0007's column-ownership rule):
 
-    STATE  — status, object_key, failure_reason, completed_at: projector-owned
-             once Phase 6 lands. Untouched by the Phase 5 transcode worker.
-    CLAIM  — attempt, claimed_at: transcode-worker-owned, used only to elect a
-             single owner for expensive work when a message could be in flight
+    STATE  — status, object_key, playlist_key, failure_reason, completed_at:
+             projector-owned once Phase 6 lands. Untouched by the transcode
+             worker.
+    CLAIM (transcode) — attempt, claimed_at: used only to elect a single
+             owner for expensive work when a message could be in flight
              twice (e.g. a manual DLQ replay racing a live retry).
+    CLAIM (packager) — packager_playlist_key: worker_package-owned
+             (ADR-0013 follow-on), read only by worker_package itself, never
+             the projector's playlist_key above.
 
-    `libs/pipeline/repository.py`'s `RenditionRepository` enforces this split
-    in code: its only write method touches claim columns, never state ones.
+    `libs/pipeline/repository.py`'s `RenditionRepository`/`PackagerRepository`
+    enforce this split in code: each only writes the columns it owns.
     """
 
     __tablename__ = "renditions"
@@ -115,6 +129,12 @@ class RenditionRow(Base):
     # --- CLAIM: transcode-worker-owned ---
     attempt: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # --- CLAIM: worker_package-owned (ADR-0013 follow-on). Both "have I seen
+    # this rendition" and the data needed to build master.m3u8 — a separate
+    # boolean/timestamp column would still require reading playlist_key
+    # above, reintroducing the race this column exists to avoid. ---
+    packager_playlist_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

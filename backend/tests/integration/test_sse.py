@@ -351,6 +351,37 @@ def test_a_failed_video_streams_the_snapshot_then_closes(
     assert '"status": "failed"' in body
 
 
+def test_a_completed_video_streams_the_snapshot_then_closes(
+    environment: None, kafka_bootstrap: str, client: Any, auth: Any, sync_sessions_factory: Any
+) -> None:
+    """Phase 9 follow-on: completed is terminal too, same as failed — a
+    reconnect to an already-finished video must not hang forever."""
+    resp = client.post(
+        "/videos",
+        json={"filename": "clip.mp4", "content_type": "video/mp4", "size_bytes": 256},
+        headers=auth(OWNER),
+    )
+    video_id = resp.json()["video_id"]
+
+    handler = projector_handler(sync_sessions_factory)
+    handler(
+        VideoStatusChanged(
+            video_id=uuid.UUID(video_id),
+            owner_id=OWNER,
+            producer="package",
+            state=VideoState.COMPLETED,
+            master_playlist_key=f"users/{OWNER}/videos/{video_id}/hls/master.m3u8",
+        ),
+        _View(),
+    )
+
+    with client.stream("GET", f"/videos/{video_id}/events", headers=auth(OWNER)) as stream:
+        body = "".join(stream.iter_text())
+
+    assert "event: snapshot" in body
+    assert '"status": "completed"' in body
+
+
 def test_another_tenants_video_is_not_found(
     environment: None, kafka_bootstrap: str, client: Any, auth: Any
 ) -> None:

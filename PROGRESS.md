@@ -571,10 +571,11 @@ Refs: ADR-0013
 
 - [x] `worker_thumbnail`: poster + sprite sheet + WebVTT, off `video.probed`
 - [x] `worker_transcode` also emits HLS segments + per-rendition playlist
-- [ ] `worker_package`: completion join — write `master.m3u8` only when every
+- [x] `worker_package`: completion join — write `master.m3u8` only when every
       *expected* rendition is done, using the DB claim (`UPDATE … WHERE NOT
-      packaged RETURNING`) so concurrent finishers elect exactly one packager
-- [ ] Emit `video.completed`; player in the UI
+      packaged RETURNING`) so concurrent finishers elect exactly one packager.
+      Also emits `video.completed` and `video.status`(`completed`).
+- [ ] Player in the UI (hls.js)
 
 **Gate:** `make e2e --grep hls` — `master.m3u8` lists every rendition exactly once,
 and a forced concurrent double-finish produces exactly one packaging run.
@@ -651,6 +652,47 @@ and a forced concurrent double-finish produces exactly one packaging run.
    playlist that lists it is promoted, so only the playlist — the thing that
    must never be readable half-written — needs the atomic-rename treatment
    the MP4 rendition already gets.
+
+**`worker_package`, discovered mid-implementation (see the ADR-0013
+follow-on for the design decision itself):**
+
+1. **A claim committed but never acted on needed its own recovery path.**
+   `claim()` and the `master.m3u8` write are not atomic together — a crash
+   between them leaves `packaging_claimed_at` set with no object ever
+   written, and nothing left to naturally retry it (the join's inputs are
+   exhausted; nothing re-triggers a video once every rendition has reported
+   in). Two layers, cheapest first: the write is wrapped in
+   `try/except Exception: release_claim(); raise`, so any failure both frees
+   the claim *and* leaves the triggering message's offset uncommitted —
+   Kafka redelivers it, same discipline as `worker_transcode`'s claim
+   (ADR-0004: commit only after success). `PackagerRepository.claim()`
+   additionally accepts a claim older than `STALE_AFTER` (10 minutes, short
+   relative to `RenditionRepository`'s 2h — packaging a text file is seconds
+   of work) as defense-in-depth for a hard kill that never reaches the
+   `except` block. Safe to make stale-reclaimable unconditionally because
+   `claim()` is only ever called after confirming `master.m3u8` doesn't
+   exist yet — a genuinely finished video never reaches it, regardless of
+   how old its claim is.
+2. **Object existence, not the claim, is the idempotency check on the read
+   path.** A redelivery of the message that already completed packaging
+   finds `master.m3u8` present and re-announces without re-claiming —
+   mirroring `worker_transcode`/`worker_thumbnail`'s existing pattern rather
+   than inventing a new one. (Like those two, redelivery still re-publishes
+   `video.completed`/`video.status` with fresh `event_id`s — an existing,
+   accepted gap this phase didn't introduce; a downstream idempotent
+   consumer, per ADR-0005, is the intended fix, not producer-side
+   suppression.)
+3. **Verified, not assumed: two ORM `session.add()`s in one transaction did
+   not respect the FK dependency order.** Writing a `VideoRow` and a
+   `RenditionRow` referencing it via `session.add()` in the same
+   `sync_session_scope` block raised a foreign-key violation — SQLAlchemy's
+   unit-of-work didn't sequence the insert before the two flushes this repo's
+   existing tests never exercised (every prior test inserts a `VideoRow`
+   alone, then creates `RenditionRow`s later via `RenditionRepository`'s raw
+   `insert()`, never both via ORM `add()` in one flush). Test fixtures now
+   commit the video and its renditions in two separate transactions; not
+   investigated further since it only affects test setup, not any shipped
+   code path.
 
 ## Phase 10 — Observability `[ ]`
 Refs: ADR-0010
@@ -798,6 +840,7 @@ bottleneck of each named.
 
 | Date | Change | Why |
 |---|---|---|
+| 2026-08-27 | `worker_package` landed (ADR-0013 follow-on): fan-in join keyed on worker-owned claim columns, not projector-owned read-model columns; SSE termination widened to `completed` | The originally-specified join read columns written from a different, unordered topic — would have hung the last video of every batch with no error, caught before any code was written |
 | 2026-08-27 | `worker_transcode` gained HLS segmentation (remux, not re-encode); idempotency widened to MP4-and-playlist | An attempt dying between the MP4 and playlist promotes is a real, tested state, not hypothetical — a single-object existence check silently missed it |
 | 2026-08-27 | Phase 9 schema landed (migration 0005); `worker_thumbnail` landed and its checkbox closed | Poster/sprite/VTT/master-playlist columns needed before any Phase 9 worker could write to them; thumbnail chosen first as the no-join, fastest-verifiable slice |
 | 2026-08-25 | Plan, tracker and ADRs 0001–0013 written | Project kickoff |

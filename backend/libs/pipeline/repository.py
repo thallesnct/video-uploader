@@ -226,6 +226,112 @@ class RenditionRepository:
         return result.scalar_one_or_none() == VideoState.COMPLETED.value
 
 
+class PackagerRepository:
+    """worker_package's write path — a fan-in join, persist-then-check
+    (ADR-0013 follow-on).
+
+    Sync, not async: same reason as RenditionRepository (ADR-0009). Every
+    method here reads or writes only CLAIM columns worker_package itself
+    owns (`videos.packager_expected_renditions`, `videos.packaging_claimed_at`,
+    `renditions.packager_playlist_key`) — never the projector's
+    `expected_renditions`/`status`/`playlist_key`, which are written from a
+    different topic with no ordering guarantee relative to what this worker
+    consumes. Reusable shape for any future fan-in: two claim columns per
+    join input (or one when it doubles as the data payload, per
+    `packager_playlist_key`), persist-then-check, no cross-ownership reads.
+    """
+
+    # A claim older than this is presumed abandoned — the caller crashed
+    # between committing the claim and finishing the (fast, small) master.m3u8
+    # write. Short relative to RenditionRepository's 2h: packaging a text file
+    # is seconds of work, not a long-running transcode. The primary recovery
+    # path is still the caller's except-block releasing the claim on any
+    # write failure (guaranteeing Kafka redelivery); this is defense-in-depth
+    # for a hard kill that never reaches that except block.
+    STALE_AFTER = timedelta(minutes=10)
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def record_expected(self, video_id: UUID, expected: list[str]) -> None:
+        """The `videos` row always exists by the time `video.probed` fires —
+        the API creates it at upload time (Phase 3) — so this is a plain
+        UPDATE, not an upsert."""
+        self._session.execute(
+            update(VideoRow)
+            .where(VideoRow.id == video_id)
+            .values(packager_expected_renditions=expected)
+        )
+        self._session.commit()
+
+    def record_rendition(self, video_id: UUID, rendition: str, playlist_key: str) -> bool:
+        """The `renditions` row always exists by the time `rendition.completed`
+        fires — `worker_transcode`'s claim() creates it before any encode
+        starts, on every path including its own idempotent-skip branches — so
+        this is a plain UPDATE. Returns False only if that invariant somehow
+        doesn't hold, which is a genuine anomaly, not a normal first-write."""
+        result = self._session.execute(
+            update(RenditionRow)
+            .where(RenditionRow.video_id == video_id, RenditionRow.rendition == rendition)
+            .values(packager_playlist_key=playlist_key)
+            .returning(RenditionRow.id)
+        )
+        self._session.commit()
+        return result.scalar_one_or_none() is not None
+
+    def ready_playlists(self, video_id: UUID) -> dict[str, str] | None:
+        """None until the expected set is known and every expected rendition
+        has reported in — the caller's signal for "not my job to package yet",
+        whether that's because video.probed hasn't landed here yet or because
+        renditions are still in flight. Never guesses from partial data."""
+        video = self._session.execute(
+            select(VideoRow.packager_expected_renditions).where(VideoRow.id == video_id)
+        ).scalar_one_or_none()
+        if not video:
+            return None
+
+        rows = self._session.execute(
+            select(RenditionRow.rendition, RenditionRow.packager_playlist_key).where(
+                RenditionRow.video_id == video_id,
+                RenditionRow.rendition.in_(video),
+                RenditionRow.packager_playlist_key.is_not(None),
+            )
+        ).all()
+        playlists: dict[str, str] = {rendition: key for rendition, key in rows if key is not None}
+        if set(playlists) != set(video):
+            return None
+        return playlists
+
+    def claim(self, video_id: UUID) -> bool:
+        """Elect exactly one packager among concurrent finishers (ADR-0013's
+        original claim). Only ever called by `worker_package` after checking
+        `master.m3u8` doesn't exist yet, so a stale claim here always means an
+        abandoned attempt, never a video that finished packaging long ago."""
+        now = datetime.now(UTC)
+        stale_before = now - self.STALE_AFTER
+        result = self._session.execute(
+            update(VideoRow)
+            .where(
+                VideoRow.id == video_id,
+                (VideoRow.packaging_claimed_at.is_(None))
+                | (VideoRow.packaging_claimed_at < stale_before),
+            )
+            .values(packaging_claimed_at=now)
+            .returning(VideoRow.id)
+        )
+        self._session.commit()
+        return result.scalar_one_or_none() is not None
+
+    def release_claim(self, video_id: UUID) -> None:
+        """Lets a failed packaging attempt be retried (ADR-0013: "clear the
+        claim so a retry can re-run it"), rather than leaving the video
+        permanently unpackageable after one failure."""
+        self._session.execute(
+            update(VideoRow).where(VideoRow.id == video_id).values(packaging_claimed_at=None)
+        )
+        self._session.commit()
+
+
 class ProjectorRepository:
     """The projector's write path — the sole owner of STATE columns (ADR-0007).
 

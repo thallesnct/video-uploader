@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pipeline.hls import build_hls_argv
+from pipeline.hls import build_hls_argv, build_master_playlist
 
 
 def test_argv_targets_vod_playlist_type() -> None:
@@ -35,3 +35,29 @@ def test_a_hostile_filename_is_one_argv_element_not_shell_syntax() -> None:
     argv = build_hls_argv(hostile, "/out")
     assert argv[argv.index("-i") + 1] == hostile
     assert all(isinstance(part, str) for part in argv)
+
+
+def test_master_playlist_uses_relative_uris_not_object_keys() -> None:
+    """A player resolves the URI against wherever it fetched master.m3u8
+    from — a full owner-prefixed S3 key here would send it to the wrong
+    place entirely."""
+    playlist = build_master_playlist(["360p"])
+    assert "360p/playlist.m3u8" in playlist
+    assert "users/" not in playlist
+
+
+def test_master_playlist_lists_every_rendition_exactly_once() -> None:
+    playlist = build_master_playlist(["720p", "360p", "1080p"])
+    for rendition in ("360p", "720p", "1080p"):
+        assert playlist.count(f"{rendition}/playlist.m3u8") == 1
+
+
+def test_master_playlist_is_ordered_ascending_by_bandwidth() -> None:
+    playlist = build_master_playlist(["1080p", "360p", "720p"])
+    lines = [line for line in playlist.splitlines() if line.endswith("playlist.m3u8")]
+    assert lines == ["360p/playlist.m3u8", "720p/playlist.m3u8", "1080p/playlist.m3u8"]
+
+
+def test_master_playlist_declares_a_bandwidth_for_every_stream() -> None:
+    playlist = build_master_playlist(["360p", "720p"])
+    assert playlist.count("#EXT-X-STREAM-INF:BANDWIDTH=") == 2

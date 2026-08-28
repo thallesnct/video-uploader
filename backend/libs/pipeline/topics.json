@@ -25,7 +25,7 @@
       "partitions": { "dev": 3, "prod": 6 },
       "retention_ms": 604800000,
       "produced_by": ["probe"],
-      "consumed_by": ["thumbnail"],
+      "consumed_by": ["thumbnail", "packager"],
       "retries": true
     },
     {

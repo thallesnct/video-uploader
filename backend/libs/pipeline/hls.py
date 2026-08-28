@@ -15,6 +15,7 @@ import subprocess
 from dataclasses import dataclass
 
 from pipeline.retry import TerminalError
+from pipeline.transcode import bitrate_for
 
 FFMPEG = "ffmpeg"
 DEFAULT_SEGMENT_SECONDS = 6
@@ -92,3 +93,27 @@ def generate_hls(
         raise TerminalError("ffmpeg reported success but wrote no HLS segments")
 
     return HlsResult(playlist_path=playlist_path, segment_paths=segment_paths)
+
+
+def build_master_playlist(renditions: list[str]) -> str:
+    """The multivariant playlist worker_package writes (ADR-0013). Pure text,
+    no ffmpeg involved — this is just string formatting against a spec.
+
+    URIs are relative to master.m3u8's own key
+    (`.../hls/master.m3u8` -> `.../hls/{rendition}/playlist.m3u8`), never a
+    full object key: a player resolves `{rendition}/playlist.m3u8` against
+    wherever it fetched the master from, so pasting an owner-prefixed S3 key
+    here would send every player to the wrong place.
+
+    Sorted ascending by height (BANDWIDTH), the conventional order for
+    adaptive players choosing a starting rendition — and a deterministic one,
+    since `renditions` arrives as whatever order a dict's keys happened to be
+    in.
+    """
+    ordered = sorted(renditions, key=lambda r: int(r.rstrip("p")))
+    lines = ["#EXTM3U", "#EXT-X-VERSION:3"]
+    for rendition in ordered:
+        bandwidth = bitrate_for(rendition) * 1000
+        lines.append(f"#EXT-X-STREAM-INF:BANDWIDTH={bandwidth}")
+        lines.append(f"{rendition}/playlist.m3u8")
+    return "\n".join(lines) + "\n"

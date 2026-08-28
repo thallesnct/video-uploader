@@ -116,7 +116,10 @@ async def sse_stream(
             # status column (ADR-0007), which also makes a reconnect after
             # the stream already ended terminate immediately instead of
             # polling Postgres forever for a client that should have closed.
-            if video_row is None or video_row.status == VideoState.FAILED.value:
+            if video_row is None or video_row.status in (
+                VideoState.FAILED.value,
+                VideoState.COMPLETED.value,
+            ):
                 return
 
             wakeup.clear()
