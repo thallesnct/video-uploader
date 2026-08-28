@@ -342,6 +342,30 @@ services:
       timeout: 5s
       retries: 10
 
+  # A stand-in for the external system worker-notify's webhook actually
+  # targets (Phase 11) — "the webhook fires" is otherwise unobservable from
+  # inside this stack. Test double, but a real hardened service like any
+  # other: nothing about serving from memory needs a writable filesystem.
+  webhook-sink:
+    build:
+      context: ./backend
+      dockerfile: services/webhook_sink/Dockerfile
+    container_name: vp-webhook-sink
+    restart: unless-stopped
+    profiles: ["app"]
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:9100/healthz')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   # e2e-only: profiles keeps it out of plain `make up`. Not given the
   # ADR-0015 hardening the backend services get (read_only, tmpfs, cap_drop)
   # — it's test tooling that never runs in prod, not a deployed component,
