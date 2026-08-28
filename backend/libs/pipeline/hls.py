@@ -14,6 +14,7 @@ import os
 import subprocess
 from dataclasses import dataclass
 
+from pipeline.obs import tracer
 from pipeline.retry import TerminalError
 from pipeline.transcode import bitrate_for
 
@@ -69,9 +70,11 @@ def generate_hls(
     os.makedirs(output_dir, exist_ok=True)
     argv = build_hls_argv(source, output_dir, segment_seconds=segment_seconds)
     try:
-        result = subprocess.run(  # noqa: S603
-            argv, capture_output=True, text=True, timeout=timeout_s, check=False
-        )
+        with tracer().start_as_current_span("ffmpeg") as span:
+            span.set_attribute("asset", "hls")
+            result = subprocess.run(  # noqa: S603
+                argv, capture_output=True, text=True, timeout=timeout_s, check=False
+            )
     except subprocess.TimeoutExpired as exc:
         raise TerminalError(f"ffmpeg exceeded its {timeout_s}s budget for hls") from exc
 

@@ -13,6 +13,7 @@ import subprocess
 from dataclasses import dataclass
 from typing import Any
 
+from pipeline.obs import tracer
 from pipeline.retry import TerminalError, TransientError
 
 FFPROBE = "ffprobe"
@@ -81,22 +82,23 @@ def parse_ffprobe(payload: dict[str, Any]) -> MediaInfo:
 def probe(path: str, timeout_s: float = 60.0) -> MediaInfo:
     """Run ffprobe against a local file."""
     try:
-        result = subprocess.run(  # noqa: S603
-            [
-                FFPROBE,
-                "-v",
-                "error",
-                "-print_format",
-                "json",
-                "-show_format",
-                "-show_streams",
-                path,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=timeout_s,
-            check=False,
-        )
+        with tracer().start_as_current_span("ffprobe"):
+            result = subprocess.run(  # noqa: S603
+                [
+                    FFPROBE,
+                    "-v",
+                    "error",
+                    "-print_format",
+                    "json",
+                    "-show_format",
+                    "-show_streams",
+                    path,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=timeout_s,
+                check=False,
+            )
     except subprocess.TimeoutExpired as exc:
         # A probe that hangs is a malformed file, not a busy system.
         raise TerminalError(f"ffprobe timed out after {timeout_s}s") from exc

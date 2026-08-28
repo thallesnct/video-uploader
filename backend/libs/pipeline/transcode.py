@@ -15,6 +15,7 @@ import os
 import subprocess
 from dataclasses import dataclass
 
+from pipeline.obs import tracer
 from pipeline.retry import TerminalError
 
 FFMPEG = "ffmpeg"
@@ -114,9 +115,11 @@ def transcode(
     not something a retry can fix (ADR-0005)."""
     argv = build_argv(source, destination, rendition)
     try:
-        result = subprocess.run(  # noqa: S603
-            argv, capture_output=True, text=True, timeout=timeout_s, check=False
-        )
+        with tracer().start_as_current_span("ffmpeg") as span:
+            span.set_attribute("rendition", rendition)
+            result = subprocess.run(  # noqa: S603
+                argv, capture_output=True, text=True, timeout=timeout_s, check=False
+            )
     except subprocess.TimeoutExpired as exc:
         raise TerminalError(f"ffmpeg exceeded its {timeout_s}s budget for {rendition}") from exc
 

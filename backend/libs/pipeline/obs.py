@@ -120,6 +120,22 @@ def setup_tracing(service_name: str | None = None) -> None:
         )
     trace.set_tracer_provider(provider)
 
+    # Auto-instrumentation for the two libraries every service in this repo
+    # already uses (ADR-0010): DB queries and S3/MinIO calls show up as
+    # child spans with no per-call-site code. Both are pinned dependencies
+    # already (pyproject.toml) — this is the one place that actually turns
+    # them on, once per process, so no service has to remember to. Guarded
+    # rather than assumed idempotent: instrumenting twice raises.
+    from opentelemetry.instrumentation.botocore import BotocoreInstrumentor
+    from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
+
+    sqlalchemy_instrumentor = SQLAlchemyInstrumentor()
+    if not sqlalchemy_instrumentor.is_instrumented_by_opentelemetry:
+        sqlalchemy_instrumentor.instrument()
+    botocore_instrumentor = BotocoreInstrumentor()
+    if not botocore_instrumentor.is_instrumented_by_opentelemetry:
+        botocore_instrumentor.instrument()
+
 
 def tracer(name: str = "pipeline") -> Any:
     from opentelemetry import trace
