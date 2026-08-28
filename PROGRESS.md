@@ -22,7 +22,7 @@ commit splits into two.
 | 5 | Transcode workers | `[x]` | `make integration ARGS="-k transcode"` ✅ 5 + full suite ✅ 30 |
 | 6 | Read model & projector | `[ ]` | `make integration ARGS="-k projector"` |
 | 7 | SSE gateway | `[ ]` | `make integration ARGS="-k sse"` |
-| 8 | Frontend | `[ ]` | `make e2e ARGS="-k upload_flow"` |
+| 8 | Frontend | `[ ]` | `make e2e ARGS="--grep upload_flow"` |
 | 9 | Thumbnails, HLS & completion join | `[x]` | `make e2e ARGS="--grep hls"` ✅ 1 test |
 | 10 | Observability | `[x]` | `make obs-verify` ✅ passing |
 | 11 | Notify & failure UX | `[x]` | `make e2e ARGS="--grep failure"` ✅ 2 tests + `make replay-verify` ✅ passing |
