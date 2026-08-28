@@ -18,6 +18,19 @@ from pipeline.retry import TerminalError, TransientError
 
 FFPROBE = "ffprobe"
 
+# ADR-0015 §1: "validate container/codec via ffprobe before transcoding, and
+# reject formats outside an allow-list; enable only the demuxers we need
+# where feasible." ffmpeg's decoder is the actual attack surface (media
+# demuxers are a long-standing source of memory-safety CVEs) — this rejects
+# an unexpected codec before worker_transcode ever hands the file to ffmpeg
+# for real decoding, not just for the cheap ffprobe read already done here.
+# worker_transcode's own output is always libx264 (transcode.py) regardless
+# of input, so this is purely about what ffmpeg is asked to *decode* — kept
+# to the codecs the frontend's own ALLOWED_TYPES containers (mp4/mov/mkv/
+# webm/avi) commonly carry. Widen deliberately if a real upload needs it,
+# never silently.
+ALLOWED_VIDEO_CODECS = frozenset({"h264", "hevc", "vp8", "vp9", "av1"})
+
 
 @dataclass(frozen=True)
 class MediaInfo:
@@ -68,11 +81,18 @@ def parse_ffprobe(payload: dict[str, Any]) -> MediaInfo:
     if duration <= 0:
         raise TerminalError(f"non-positive duration {duration}")
 
+    video_codec = str(video.get("codec_name", "unknown"))
+    if video_codec not in ALLOWED_VIDEO_CODECS:
+        # Retrying can't help: the file's codec doesn't change on redelivery.
+        # Straight to the DLQ (RetryPolicy routes TerminalError there), same
+        # as every other "this input is fundamentally rejected" case above.
+        raise TerminalError(f"unsupported video codec {video_codec!r}")
+
     return MediaInfo(
         duration_s=duration,
         width=width,
         height=height,
-        video_codec=str(video.get("codec_name", "unknown")),
+        video_codec=video_codec,
         # Plenty of real video has no audio track at all.
         audio_codec=str(audio["codec_name"]) if audio and "codec_name" in audio else None,
         rotation=_rotation_of(video),

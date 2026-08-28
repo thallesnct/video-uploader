@@ -111,3 +111,26 @@ def test_malformed_dimensions_are_terminal() -> None:
     )
     with pytest.raises(TerminalError, match="malformed"):
         parse_ffprobe(payload)
+
+
+@pytest.mark.parametrize("codec", ["h264", "hevc", "vp8", "vp9", "av1"])
+def test_allowed_video_codecs_pass_through_unchanged(codec: str) -> None:
+    """ADR-0015 §1: reject a codec outside the allow-list before ffmpeg is
+    ever asked to decode it for real, not just for this ffprobe read."""
+    payload = probe_payload(
+        streams=[{"codec_type": "video", "codec_name": codec, "width": 640, "height": 360}]
+    )
+
+    assert parse_ffprobe(payload).video_codec == codec
+
+
+@pytest.mark.parametrize("codec", ["mjpeg", "wmv3", "prores", "theora"])
+def test_a_disallowed_video_codec_is_terminal_not_transient(codec: str) -> None:
+    """Terminal, not transient: the file's codec doesn't change on
+    redelivery, so retrying can't help — straight to the DLQ."""
+    payload = probe_payload(
+        streams=[{"codec_type": "video", "codec_name": codec, "width": 640, "height": 360}]
+    )
+
+    with pytest.raises(TerminalError, match="unsupported video codec"):
+        parse_ffprobe(payload)

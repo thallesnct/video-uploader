@@ -1003,7 +1003,7 @@ Refs: ADR-0015
 - [ ] **Media-worker containment** — non-root, read-only rootfs + tmpfs scratch,
       `cap-drop ALL`, `no-new-privileges`, seccomp, no network egress beyond
       Kafka/S3/Postgres, CPU/memory/wall-clock limits, ffmpeg `-threads` cap
-- [ ] Input allow-list from ffprobe before transcoding; no `shell=True` anywhere;
+- [x] Input allow-list from ffprobe before transcoding; no `shell=True` anywhere;
       filenames derived from `video_id`, never from the uploaded name
 - [ ] Backpressure / concurrency caps per worker; resource limits in compose
 - [ ] Kafka prod profile: RF=3, `min.insync.replicas=2`, `acks=all`, no unclean
