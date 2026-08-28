@@ -1015,15 +1015,20 @@ Refs: ADR-0015
 - [ ] Migrations backward compatible for one release; run as a pre-deploy job
 - [ ] SLOs defined; alerts fire on symptoms (lag, DLQ depth, SLO burn)
 - [ ] README quickstart; ADR index current; PLAN.md diagram matches reality
-- [ ] **Known gap from Phase 5** — `RenditionRepository.claim()`'s stale window
+- [x] **Known gap from Phase 5** — `RenditionRepository.claim()`'s stale window
       (`STALE_AFTER = 2h`) is longer than the retry ladder's total span
       (10s/1m/10m). If a worker crashes mid-claim, siblings retrying the same
       rendition hit `TransientError` (claim denied) on every attempt and the
       message DLQs before the 2h stale window ever frees the claim — even
-      though nothing is actually wrong with the rendition. Fix by shortening
-      `STALE_AFTER` to comfortably less than the retry ladder's span, or by
-      widening the ladder, so a crashed sibling's claim frees before the
-      message dead-letters.
+      though nothing is actually wrong with the rendition. Fixed by shortening
+      `STALE_AFTER` to `5m`, comfortably under the ladder's ~11m10s total span
+      so the message's last retry (in the 10m tier) finds the claim stale and
+      succeeds instead of dead-lettering. `tests/integration/test_repository.py`
+      (new — no test exercised this at all before): a live claim blocks a
+      second claimant; a claim back-dated past `STALE_AFTER` frees for one.
+      `make integration ARGS="-k test_repository"` — 2 passed, 38.16s.
+      `make integration ARGS="-k 'transcode or package'"` — 14 passed, 161.36s,
+      confirming no regression in the two stages that actually call `claim()`.
 
 **Gate:** `make ci` green from a clean clone on a machine with only Docker, plus
 `make security-verify` — images scan clean at the agreed severity, containers run

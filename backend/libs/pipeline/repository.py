@@ -166,10 +166,20 @@ class RenditionRepository:
     """
 
     # A claim older than this is presumed abandoned (worker crashed mid-job)
-    # and may be re-claimed. Set well above any realistic transcode duration —
-    # a genuinely still-processing job is protected by max.poll.interval.ms and
-    # the pause/resume loop (ADR-0004), not by this window.
-    STALE_AFTER = timedelta(hours=2)
+    # and may be re-claimed. A genuinely still-processing job is protected by
+    # max.poll.interval.ms and the pause/resume loop (ADR-0004), not by this
+    # window, so it doesn't need to be anywhere near a realistic transcode
+    # duration — it needs to be comfortably *shorter* than the retry ladder's
+    # total span (10s + 1m + 10m ~= 11m10s), the opposite of what a 2h window
+    # gave (Phase 12, known gap from Phase 5): if a worker crashes mid-claim,
+    # every redelivery of the same message hits TransientError (claim denied)
+    # against the still-live stale claim, and the message DLQs at ~11m10s —
+    # long before a 2h window would ever have freed it, even though nothing
+    # is actually wrong with the rendition. 5m clears the ladder's last hop
+    # (the message's final retry, in the 10m tier, arrives at ~11m10s > 5m)
+    # while staying an order of magnitude above any realistic single-message
+    # processing time.
+    STALE_AFTER = timedelta(minutes=5)
 
     def __init__(self, session: Session) -> None:
         self._session = session
