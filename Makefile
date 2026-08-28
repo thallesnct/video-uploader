@@ -20,7 +20,7 @@ endif
 DC_OBS  := docker compose -f docker-compose.yml -f docker-compose.obs.yml
 
 .DEFAULT_GOAL := help
-.PHONY: help up down logs ps topics buckets bootstrap smoke migrate \
+.PHONY: help up down logs ps topics buckets bootstrap smoke migrate replay \
         obs-up obs-down obs-verify unit integration e2e lint ci security-verify
 
 help: ## List targets
@@ -56,6 +56,9 @@ buckets: ## Create/verify the MinIO bucket and lifecycle rules
 
 smoke: ## Verify every dependency is actually usable (Phase 1 gate)
 	@python3 infra/smoke.py
+
+replay: ## Manual DLQ replay: make replay TOPIC=<topic>.dlq [VIDEO=<video_id>]
+	@python3 infra/replay.py --topic $(TOPIC) $(if $(VIDEO),--video-id $(VIDEO))
 
 obs-up: .env ## Start the observability stack as well
 	$(DC_OBS) up -d --wait
