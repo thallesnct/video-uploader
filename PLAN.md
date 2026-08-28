@@ -51,7 +51,7 @@ interesting (ADR-0012).
 
 | Service | Runtime | Responsibility |
 |---|---|---|
-| `web` | React 19 + TS + Vite, nginx in prod | Upload form, live rendition grid, HLS player |
+| `web` | React 19 + TS + Vite, nginx in prod | Upload form, live rendition grid, HLS player with manual quality selection |
 | `api` | FastAPI + `aiokafka` (asyncio) | Presign, `/complete`, read-model queries, SSE gateway |
 | `worker-probe` | `confluent-kafka` + ffprobe | Read source metadata, decide the rendition ladder |
 | `worker-transcode` | `confluent-kafka` + ffmpeg | One rendition per message; the parallel hot path |
