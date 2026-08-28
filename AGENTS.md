@@ -52,6 +52,16 @@ with Prometheus metrics and OpenTelemetry traces.
 - Test fixture is a 2-second generated clip
   (`ffmpeg -f lavfi -i testsrc=size=640x360:rate=15 -t 2`). Do not add large
   binary media to the repo.
+- **The Playwright container (`mcr.microsoft.com/playwright:*-noble`) has no
+  H.264 decode.** Verified empirically:
+  `MediaSource.isTypeSupported("video/mp4; codecs=\"avc1...\"")` returns
+  `false`, and the image ships only `chromium`/`chromium_headless_shell`/
+  `firefox`/`webkit` — no `google-chrome`. hls.js still fetches and parses
+  playlists/segments fine (that's a network/parsing concern, not decode); an
+  e2e spec can assert the fetch chain but never `video.currentTime`
+  advancing. Don't add `channel: "chrome"` or install Google Chrome to work
+  around it — that's a new dependency (non-negotiable #9) and more image
+  weight, not a one-line fix.
 
 ## Commands
 

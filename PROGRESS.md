@@ -716,12 +716,28 @@ follow-on for the design decision itself):**
    endpoint), so only the single flat poster request needs the
    `access_token` query-param fallback — a query string doesn't survive the
    relative-URL resolution the playlist tree in note 1 depends on.
-3. **Verified by hand, not yet by an automated e2e spec.** Uploaded a video
-   through the real dev stack to `completed` and confirmed playback in an
-   actual browser (network tab: poster/master.m3u8/playlist/segment all 200;
-   console clean). No `tests/e2e/` Playwright spec exists yet for this flow,
-   so the phase gate below has never actually been run — closing the phase
-   still needs that spec written and green.
+3. **Verified by hand first, then by `tests/e2e/hls-playback.spec.ts`.**
+   Uploaded a video through the real dev stack to `completed` and confirmed
+   playback in an actual (non-headless) browser: network tab showed
+   poster/master.m3u8/playlist/segment all 200, console clean, picture
+   actually moving. The committed spec automates the same upload→completed
+   flow and asserts every rendition tile turns ready, `master.m3u8` lists
+   each rendition exactly once, the poster loads via the query-param path,
+   and hls.js's own fetch of the first segment succeeds — all through
+   `video_media`'s auth. It does not assert decoded pixel playback
+   (`video.currentTime` advancing); see note 4.
+4. **The e2e gate can prove the fetch chain but not decode, and that's a
+   CI-browser limitation, not a product gap.** `mcr.microsoft.com/playwright:*-noble`'s
+   bundled Chromium has no H.264 license —
+   `MediaSource.isTypeSupported("video/mp4; codecs=\"avc1...\"")` is `false`,
+   verified empirically inside that exact image, and it ships no
+   `google-chrome` to fall back to. hls.js still fetches and parses every
+   playlist/segment correctly (proven by note 3's spec); only the final MSE
+   `addSourceBuffer`/decode step is unavailable in that environment. Recorded
+   as a repo-level environment constraint in AGENTS.md rather than worked
+   around — installing Google Chrome or switching the transcode codec are
+   both a new dependency (non-negotiable #9) that a test-environment gap
+   doesn't justify.
 
 ## Phase 10 — Observability `[ ]`
 Refs: ADR-0010
