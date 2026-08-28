@@ -1,3 +1,0 @@
-Dashboard JSON lands here in Phase 10 (ADR-0010): pipeline overview, stage
-detail, Kafka health, infrastructure. Provisioning is wired now so adding a
-file is the only step then.
