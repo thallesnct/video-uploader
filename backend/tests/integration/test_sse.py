@@ -138,6 +138,60 @@ async def test_a_late_connect_sees_finished_renditions_in_the_snapshot_then_live
         await broadcaster.stop()
 
 
+async def test_a_rendition_failure_streams_live_as_rendition_failed(
+    environment: None, kafka_bootstrap: str, async_sessions: Any, sync_sessions_factory: Any
+) -> None:
+    """Phase 11: a pipeline.failed row carrying a rendition must reach the
+    browser as its own event name — sse_event_name's payload-shape dispatch,
+    exercised through the real projector/Kafka/broadcaster, not just the
+    pure-function unit test."""
+    video_id = uuid.uuid4()
+    await insert_video_row(async_sessions, video_id)
+    handler = projector_handler(sync_sessions_factory)
+
+    handler(
+        VideoStatusChanged(
+            video_id=video_id,
+            owner_id=OWNER,
+            producer="probe",
+            state=VideoState.PROBED,
+            expected_renditions=["360p", "720p"],
+        ),
+        _View(),
+    )
+
+    broadcaster = StatusBroadcaster()
+    await broadcaster.start()
+    try:
+        agen = sse_stream(async_sessions, broadcaster, OWNER, video_id, None)
+        snapshot = await anext_within(agen)
+        assert snapshot["event"] == "snapshot"
+
+        producer = EventProducer(service="test")
+        event = PipelineFailed(
+            video_id=video_id,
+            owner_id=OWNER,
+            producer="transcode",
+            stage="worker-transcode",
+            reason="TerminalError: unsupported codec",
+            terminal=True,
+            rendition="720p",
+        )
+        handler(event, _View())
+        producer.publish(PIPELINE_FAILED, event)
+        producer.flush()
+
+        live = await anext_within(agen)
+        assert live["event"] == "rendition.failed"
+        payload = json.loads(live["data"])
+        assert payload["rendition"] == "720p"
+        assert payload["reason"] == "TerminalError: unsupported codec"
+
+        await agen.aclose()
+    finally:
+        await broadcaster.stop()
+
+
 async def test_two_replicas_both_see_an_event_from_either(
     environment: None, kafka_bootstrap: str
 ) -> None:

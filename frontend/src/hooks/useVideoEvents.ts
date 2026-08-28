@@ -133,6 +133,31 @@ export function useVideoEvents(
         ]);
       });
 
+      es.addEventListener("rendition.failed", (event) => {
+        const payload = JSON.parse((event as MessageEvent).data) as {
+          rendition: string;
+          reason: string;
+        };
+        queryClient.setQueryData<RenditionSnapshot[]>(["renditions", videoId], (old = []) => [
+          ...old.filter((r) => r.rendition !== payload.rendition),
+          {
+            rendition: payload.rendition,
+            status: "failed",
+            object_key: null,
+            failure_reason: payload.reason,
+            completed_at: null,
+          },
+        ]);
+        // A rendition failing terminally still means the whole video is
+        // terminally failed — worker_package's join can never complete
+        // without every expected rendition (ADR-0013) — so this closes the
+        // same way the video-level "failed" handler below does.
+        applyVideoPatch({ status: "failed", failure_reason: payload.reason });
+        closedForGood = true;
+        es?.close();
+        setState("closed");
+      });
+
       es.addEventListener("failed", (event) => {
         const payload = JSON.parse((event as MessageEvent).data) as { reason: string };
         applyVideoPatch({ status: "failed", failure_reason: payload.reason });

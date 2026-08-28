@@ -27,4 +27,5 @@
 }
 .tileReady { background: var(--color-success-bg); }
 .tilePending { background: var(--color-surface); }
+.tileFailed { background: var(--color-error-bg); color: var(--color-error-fg); }
 .renditionName { font-weight: 600; }

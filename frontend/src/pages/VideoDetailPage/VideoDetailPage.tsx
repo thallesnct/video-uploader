@@ -96,13 +96,20 @@ export function VideoDetailPage() {
           {expected.map((rendition) => {
             const row = known.get(rendition);
             const ready = row?.status === "completed";
+            const failed = row?.status === "failed";
+            const tileClass = failed
+              ? styles.tileFailed
+              : ready
+                ? styles.tileReady
+                : styles.tilePending;
             return (
               <li
                 key={rendition}
-                className={`${styles.tile} ${ready ? styles.tileReady : styles.tilePending}`}
+                className={`${styles.tile} ${tileClass}`}
+                title={failed ? (row?.failure_reason ?? undefined) : undefined}
               >
                 <span className={styles.renditionName}>{rendition}</span>
-                <span>{ready ? "✓ ready" : "pending"}</span>
+                <span>{failed ? "✗ failed" : ready ? "✓ ready" : "pending"}</span>
               </li>
             );
           })}
