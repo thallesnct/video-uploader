@@ -376,6 +376,38 @@ services:
       timeout: 5s
       retries: 10
 
+  # The component ADR-0002/0005/0009 all name and none of them scheduled
+  # building (Phase 11) — drains every <topic>.retry.<tier> topic and
+  # republishes to <topic> once each message's delay has elapsed. No DB/S3:
+  # this only ever moves messages between topics.
+  worker-retry-pump:
+    build:
+      context: ./backend
+      dockerfile: services/worker_retry_pump/Dockerfile
+      target: runtime
+    container_name: vp-worker-retry-pump
+    restart: unless-stopped
+    profiles: ["app"]
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SERVICE_NAME: worker-retry-pump
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    depends_on:
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/healthz')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   # A stand-in for the external system worker-notify's webhook actually
   # targets (Phase 11) — "the webhook fires" is otherwise unobservable from
   # inside this stack. Test double, but a real hardened service like any

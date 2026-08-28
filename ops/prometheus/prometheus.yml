@@ -26,4 +26,5 @@ scrape_configs:
           - "worker-thumbnail:8000"
           - "worker-package:8000"
           - "worker-notify:8000"
+          - "worker-retry-pump:8000"
           - "projector:8000"
