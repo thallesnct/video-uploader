@@ -30,9 +30,20 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 def sse_event_name(row: EventRow) -> str:
     """The wire `event:` name (ADR-0008's fixed list, as far as current stages
     populate it). Not used for stream termination — that re-checks the video
-    row's status column fresh every poll, not this payload shape."""
+    row's status column fresh every poll, not this payload shape.
+
+    `pipeline.failed` splits the same way `video.status` already does for
+    `rendition.completed` vs `status` (Phase 11): a payload carrying a
+    `rendition` is one specific rendition failing (worker_transcode/
+    worker_thumbnail already failed after rendition-specific work started),
+    distinct from a video-level-only failure with no rendition
+    (worker_probe rejecting a corrupt source before any rendition work
+    begins). The projector already writes both the video row and the
+    specific rendition row's failure (ProjectorRepository._apply_failure) —
+    this is what lets the browser tell the two apart on the wire.
+    """
     if row.type == "pipeline.failed":
-        return "failed"
+        return "rendition.failed" if row.payload.get("rendition") is not None else "failed"
     if row.type == "video.status":
         payload = row.payload
         if payload.get("rendition") is not None and payload.get("rendition_object_key") is not None:
