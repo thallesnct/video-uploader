@@ -1020,7 +1020,7 @@ Refs: ADR-0015
 - [x] Backpressure / concurrency caps per worker; resource limits in compose
 - [ ] Kafka prod profile: RF=3, `min.insync.replicas=2`, `acks=all`, no unclean
       leader election, auto-create off, TLS+SASL, per-topic retention
-- [ ] Prometheus multiprocess mode wired in the API entrypoint (ADR-0014 gotcha)
+- [x] Prometheus multiprocess mode wired in the API entrypoint (ADR-0014 gotcha)
 - [ ] Backups: Postgres PITR with a **rehearsed restore**; object versioning +
       lifecycle rules for `tmp/` and abandoned uploads
 - [ ] CI workflow: lint → unit → integration → build+Trivy scan+SBOM → e2e

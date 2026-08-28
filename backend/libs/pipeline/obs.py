@@ -190,3 +190,32 @@ def extract_trace_context(headers: Sequence[tuple[str, bytes]] | None) -> Any:
         for key, value in (headers or [])
     }
     return extract(carrier)
+
+
+def render_metrics() -> bytes:
+    """The `/metrics` response body, correct whether this process is alone
+    or one of several uvicorn `--workers` (Phase 12, ADR-0014's own noted
+    gotcha).
+
+    Every service here runs one process today (compose starts one container
+    each, no worker's entrypoint forks), so plain generate_latest() against
+    the default global REGISTRY has always been correct so far — but each
+    uvicorn worker process would otherwise carry its own independent
+    in-memory registry, and a scrape landing on a different process each
+    time would see a different, partial view rather than the aggregate.
+    PROMETHEUS_MULTIPROC_DIR being set is prometheus_client's own signal
+    that multiprocess mode is active; when it isn't, this is exactly the
+    generate_latest() call it always was.
+    """
+    import os
+
+    from prometheus_client import CollectorRegistry, generate_latest
+
+    if "PROMETHEUS_MULTIPROC_DIR" not in os.environ:
+        return generate_latest()
+
+    from prometheus_client import multiprocess
+
+    registry = CollectorRegistry()
+    multiprocess.MultiProcessCollector(registry)
+    return generate_latest(registry)

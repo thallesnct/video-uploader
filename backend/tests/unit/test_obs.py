@@ -7,10 +7,11 @@ code runs."""
 
 from __future__ import annotations
 
+import pathlib
 import time
 
 import pytest
-from pipeline.obs import observe_stage
+from pipeline.obs import observe_stage, render_metrics
 from prometheus_client import REGISTRY
 
 
@@ -45,3 +46,25 @@ def test_stage_in_flight_seconds_clears_even_on_a_failed_handler() -> None:
         raise RuntimeError("boom")
 
     assert _in_flight_seconds(stage) is None
+
+
+# render_metrics() (Phase 12, ADR-0014's own noted gotcha): every service
+# today runs one process, so the default-registry path is what's exercised
+# in production right now — this proves it still works, and that the
+# multiprocess branch (only reachable via PROMETHEUS_MULTIPROC_DIR, which
+# nothing sets today) at least runs without error, ahead of ever actually
+# needing it. The real end-to-end proof (two live uvicorn workers, one
+# .db file per worker, sse_connections_active correctly summed to one
+# series) was run by hand against the live stack, recorded in the closing
+# commit — a unit test can't fork real uvicorn workers.
+def test_render_metrics_default_registry_path() -> None:
+    body = render_metrics()
+    assert b"sse_connections_active" in body
+
+
+def test_render_metrics_multiprocess_path_does_not_error(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PROMETHEUS_MULTIPROC_DIR", str(tmp_path))
+    body = render_metrics()
+    assert isinstance(body, bytes)

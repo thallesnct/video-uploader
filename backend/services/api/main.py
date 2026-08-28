@@ -24,7 +24,7 @@ from pipeline.auth import AuthError, Principal, TokenVerifier, bearer_token
 from pipeline.broadcast import StatusBroadcaster
 from pipeline.db import create_engine, session_scope, sessions
 from pipeline.events import VideoState, VideoStatusChanged, VideoUploaded
-from pipeline.obs import SSE_CONNECTIONS, setup_tracing
+from pipeline.obs import SSE_CONNECTIONS, render_metrics, setup_tracing
 from pipeline.producer import AsyncEventProducer
 from pipeline.repository import VideoRepository
 from pipeline.settings import api_settings, observability_settings, quota_settings, sse_settings
@@ -182,9 +182,9 @@ async def readyz(response: Response) -> dict[str, str]:
 
 @app.get("/metrics", include_in_schema=False)
 async def metrics() -> Response:
-    from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+    from prometheus_client import CONTENT_TYPE_LATEST
 
-    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+    return Response(render_metrics(), media_type=CONTENT_TYPE_LATEST)
 
 
 # ------------------------------------------------------------------ upload path
