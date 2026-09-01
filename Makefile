@@ -177,7 +177,13 @@ lint: ## ruff + mypy + eslint
 	$(RUN) ruff format --check ../infra
 	cd frontend && npm run lint
 
-security-verify: up ## Image scan, non-root, read-only rootfs, egress denied
+# `up migrate`, not just `up`, matching e2e/replay-verify's own precedent
+# (docker-compose.yml's comment on the `app` profile): on a machine that has
+# never run `make migrate` before (a fresh CI runner, not this session's own
+# already-migrated dev volumes), the app-profile containers would crash-loop
+# against an unmigrated schema and `--wait` below would time out instead of
+# ever reaching the checks.
+security-verify: up migrate ## Image scan, non-root, read-only rootfs, egress denied
 	$(COMPOSE) --profile app up -d --build --wait
 	@python3 infra/security_verify.py
 

@@ -1,0 +1,112 @@
+name: CI
+
+# Every job below calls the exact `make` target a human runs locally
+# (AGENTS.md's own commands table) — CI is not a parallel bespoke script,
+# it's this repo's own gates run on a clean machine. `make`'s own fallback
+# (backend/Makefile: use host `uv` when present, else a `uv`-in-Docker
+# container) means no job needs a Python setup step at all; only the
+# frontend-lint and Trivy-SBOM steps need tools GitHub's runner doesn't
+# already ship in a pinned form.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: make lint
+
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: make unit
+
+  # testcontainers only — no compose stack, no migration step needed (each
+  # test brings up and tears down its own Kafka/Postgres/MinIO).
+  integration:
+    runs-on: ubuntu-latest
+    needs: [lint, unit]
+    steps:
+      - uses: actions/checkout@v4
+      - run: make integration
+
+  # Builds every image this project ships and scans each one with the same
+  # severity gate `make security-verify` uses (HIGH/CRITICAL,
+  # --ignore-unfixed — decided once in infra/security_verify.py, not
+  # redecided here), plus a CycloneDX SBOM per image as a build artifact.
+  # Scanning is informational here (exit-code 0): the actual pass/fail gate
+  # for this repo's known findings is `make security-verify` later in this
+  # workflow, which also asserts non-root/read-only/egress-denied on the
+  # *running* containers — this job only proves the images build and
+  # records what Trivy sees in them.
+  build-and-scan:
+    runs-on: ubuntu-latest
+    needs: [lint, unit]
+    steps:
+      - uses: actions/checkout@v4
+      - name: build every service image
+        run: |
+          cp .env.example .env
+          docker compose --profile app build
+      - name: Trivy scan + SBOM per image
+        run: |
+          set -eu
+          mkdir -p sbom
+          images="video-pipeline-api video-pipeline-devauth video-pipeline-webhook-sink \
+                  video-pipeline-worker-probe video-pipeline-worker-transcode \
+                  video-pipeline-worker-thumbnail video-pipeline-worker-package \
+                  video-pipeline-worker-notify video-pipeline-worker-retry-pump \
+                  video-pipeline-projector"
+          for img in $images; do
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+              aquasec/trivy:latest image \
+              --severity HIGH,CRITICAL --ignore-unfixed --exit-code 0 "$img"
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+              -v "$PWD/sbom":/sbom aquasec/trivy:latest image \
+              --format cyclonedx --output "/sbom/${img}.cyclonedx.json" "$img"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom/
+
+  e2e:
+    runs-on: ubuntu-latest
+    needs: [integration, build-and-scan]
+    steps:
+      - uses: actions/checkout@v4
+      - run: make e2e
+
+  # The remaining two legs of `make ci` (Makefile: `ci: lint unit integration
+  # e2e replay-verify`) plus the phase's own containment/egress gate — kept
+  # as separate jobs, not folded into `e2e`, so a failure in one doesn't hide
+  # the other's result in the Actions UI.
+  replay-verify:
+    runs-on: ubuntu-latest
+    needs: [e2e]
+    steps:
+      - uses: actions/checkout@v4
+      - run: make replay-verify
+
+  security-verify:
+    runs-on: ubuntu-latest
+    needs: [e2e]
+    steps:
+      - uses: actions/checkout@v4
+      - run: make security-verify

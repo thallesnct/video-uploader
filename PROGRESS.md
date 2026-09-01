@@ -1028,7 +1028,31 @@ Refs: ADR-0015
 - [x] Prometheus multiprocess mode wired in the API entrypoint (ADR-0014 gotcha)
 - [ ] Backups: Postgres PITR with a **rehearsed restore**; object versioning +
       lifecycle rules for `tmp/` and abandoned uploads
-- [ ] CI workflow: lint → unit → integration → build+Trivy scan+SBOM → e2e
+- [x] CI workflow: lint → unit → integration → build+Trivy scan+SBOM → e2e.
+      `.github/workflows/ci.yml`, seven jobs, each calling the exact `make`
+      target used locally (no parallel bespoke script) — `lint`/`unit` run
+      first, `integration` and `build-and-scan` both gate on them, `e2e`
+      needs both, `replay-verify`/`security-verify` (the other two legs of
+      `make ci`, plus the phase's own containment gate) run after `e2e`.
+      `build-and-scan` builds all ten images, scans each with Trivy at the
+      same HIGH/CRITICAL/`--ignore-unfixed` gate `security_verify.py` uses
+      (informational here — `exit-code 0` — since `security-verify` is the
+      actual pass/fail gate for known findings) and uploads a CycloneDX SBOM
+      per image as a build artifact. `make` itself needs no separate
+      language setup step: its own `uv`-or-Docker fallback (Makefile's `UV`
+      var) means a bare-Docker runner already has everything `lint`/`unit`/
+      `integration` need; only frontend lint (`actions/setup-node`) and the
+      SBOM step (`aquasec/trivy` image) add anything GitHub's runner doesn't
+      ship. Found and fixed while writing this: `security-verify`'s Makefile
+      target depended on `up` but not `migrate` — harmless on this session's
+      own already-migrated dev volumes, but would crash-loop the app-profile
+      containers against an unmigrated schema on a genuinely fresh runner;
+      now `security-verify: up migrate`, matching `e2e`/`replay-verify`'s
+      existing precedent. No live runner to trigger this against (no push
+      this session, per "commit only when asked") — verified instead with
+      `actionlint` against the real file (`docker run rhysd/actionlint`,
+      clean) and manual review of the job graph, stated as the real limit on
+      verification depth here, not glossed over.
 - [ ] Migrations backward compatible for one release; run as a pre-deploy job
 - [ ] SLOs defined; alerts fire on symptoms (lag, DLQ depth, SLO burn)
 - [ ] README quickstart; ADR index current; PLAN.md diagram matches reality
