@@ -1085,7 +1085,22 @@ Refs: ADR-0015
       real numbers"), and Phase 14 exists specifically to measure it. Noted
       as observable-but-not-yet-alertable (per-video, via the trace each
       upload already produces) rather than silently left off the table.
-- [ ] README quickstart; ADR index current; PLAN.md diagram matches reality
+- [x] README quickstart; ADR index current; PLAN.md diagram matches reality.
+      New root `README.md` (didn't exist at all): quickstart (`make up` →
+      `migrate` → `smoke` → app profile → frontend or curl), observability,
+      the everyday `make` commands, project layout — verified against the
+      real repo, not just written from memory (`make help`'s actual target
+      list, the real 4 provisioned Grafana dashboards via `ls
+      ops/grafana/dashboards/`). ADR index (`docs/adr/README.md`) already
+      current through 0016 — no new ADR landed from any Phase 12 item, so no
+      edit needed. `PLAN.md`: diagram and component table already match
+      reality (checked — no service is missing that belongs there); fixed a
+      real staleness instead: the top status line still read "planning
+      complete, implementation not started" despite eleven phases being
+      done. `webhook-sink` deliberately **not** added to the component
+      table — checked the stated precedent (`devauth`, the other dev/test
+      double) and found it has no row there either, so matching precedent
+      means neither gets one, not that webhook-sink should.
 - [x] **Known gap from Phase 5** — `RenditionRepository.claim()`'s stale window
       (`STALE_AFTER = 2h`) is longer than the retry ladder's total span
       (10s/1m/10m). If a worker crashes mid-claim, siblings retrying the same

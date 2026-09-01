@@ -4,9 +4,11 @@ A Python system that ingests an uploaded video, fans it out across Kafka-driven
 stages (probe → transcode → thumbnails → package → notify), and streams progress
 to a browser over SSE, with Prometheus/Grafana metrics and OpenTelemetry traces.
 
-Status: **planning complete, implementation not started.** Track work in
-[PROGRESS.md](PROGRESS.md). Every decision below is recorded as an ADR in
-[docs/adr/](docs/adr/README.md) — read those for the rejected alternatives.
+Status: **Phases 0–11 done, Phase 12 (production hardening) in progress.**
+Track work in [PROGRESS.md](PROGRESS.md) — a phase is checked off only once
+its gate command has actually been run and passed. Every decision below is
+recorded as an ADR in [docs/adr/](docs/adr/README.md) — read those for the
+rejected alternatives. See [README.md](README.md) for how to run it.
 
 **Scope note (confirmed with the user 2026-08-28):** this system is built to
 a genuine production-readiness bar (ADR-0015) — hardening, observability,
