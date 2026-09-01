@@ -21,7 +21,8 @@ DC_OBS  := docker compose -f docker-compose.yml -f docker-compose.obs.yml
 
 .DEFAULT_GOAL := help
 .PHONY: help up down logs ps topics buckets bootstrap smoke migrate replay \
-        obs-up obs-down obs-verify replay-verify unit integration e2e lint ci security-verify
+        obs-up obs-down obs-verify replay-verify unit integration e2e lint ci \
+        security-verify migrate-compat
 
 help: ## List targets
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | sort | \
@@ -169,13 +170,17 @@ e2e: up migrate ## Full compose + Playwright
 # infra/ruff.toml extends backend/pyproject.toml's config rather than this
 # target trying to point one ruff invocation at two directories with
 # different per-file-ignore bases.
-lint: ## ruff + mypy + eslint
+lint: ## ruff + mypy + eslint + migration backward-compat
 	$(RUN) ruff check .
 	$(RUN) ruff format --check .
 	$(RUN) mypy libs/pipeline
 	$(RUN) ruff check ../infra
 	$(RUN) ruff format --check ../infra
 	cd frontend && npm run lint
+	@$(MAKE) --no-print-directory migrate-compat
+
+migrate-compat: ## Static check: every migration's upgrade() is rolling-restart-safe
+	@python3 infra/check_migration_compat.py
 
 # `up migrate`, not just `up`, matching e2e/replay-verify's own precedent
 # (docker-compose.yml's comment on the `app` profile): on a machine that has

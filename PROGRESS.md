@@ -1053,7 +1053,22 @@ Refs: ADR-0015
       `actionlint` against the real file (`docker run rhysd/actionlint`,
       clean) and manual review of the job graph, stated as the real limit on
       verification depth here, not glossed over.
-- [ ] Migrations backward compatible for one release; run as a pre-deploy job
+- [x] Migrations backward compatible for one release; run as a pre-deploy job.
+      Policy written down in `backend/migrations/README.md` (expand/contract:
+      add nullable-or-defaulted, never drop/rename/retype in the same release
+      that stops reading the old shape). New `infra/check_migration_compat.py`
+      (`make migrate-compat`, folded into `make lint`) — stdlib `ast`, walks
+      each `versions/*.py`'s `upgrade()` for a bare `drop_column`/
+      `drop_table`/`rename_table`, an `alter_column` rename or type change, or
+      an `add_column`/`alter_column` setting `nullable=False` with no
+      `server_default`; a `# migration-compat: allow <reason>` comment
+      exempts a reviewed line without hiding it from the output. Verified
+      both directions, not just "it currently passes": a synthetic migration
+      file with one of every unsafe shape (built in `/tmp`, discarded after)
+      was correctly flagged for all four, including the exemption comment
+      correctly suppressing the fifth from `unresolved`; `0001`–`0006` audited
+      for real by running the checker against them, not assumed clean —
+      PASSED, confirming the "additive so far" claim empirically.
 - [ ] SLOs defined; alerts fire on symptoms (lag, DLQ depth, SLO burn)
 - [ ] README quickstart; ADR index current; PLAN.md diagram matches reality
 - [x] **Known gap from Phase 5** — `RenditionRepository.claim()`'s stale window
