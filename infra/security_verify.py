@@ -40,16 +40,12 @@ OUR_IMAGES = [
     "video-pipeline-projector",
 ]
 
-# Known, accepted findings — allow-listed by exact reason, not by turning
-# down the severity gate. devauth's signing key is a dev/test-only mock
-# OIDC issuer's key (services/devauth/), never used for anything but
-# minting local test tokens, its own filename already says "insecure", and
-# it is already committed to git — this project's own established
-# convention already treats it as a fixture, not a secret. Trivy is right
-# to flag "a private key baked into an image" as a class of finding worth
-# catching; this is the one place it's correct to do that and still be a
-# false positive for what this key actually is.
-ALLOWED_SECRET_PATHS = {"/app/services/devauth/dev-only-insecure-signing-key.pem"}
+# No allow-listed secret findings: devauth's mock-issuer signing key (the
+# one credential this project ever baked into an image) is generated fresh
+# in memory at process start now, never written to disk or committed — so
+# there is nothing left for Trivy's secrets scan to legitimately find here.
+# Any "Secrets" finding below is real and should fail this gate, not be
+# excused.
 
 # Compose service names for OUR_IMAGES, in the same order — needed because
 # `docker compose ps` (even scoped with --profile app) lists every running
@@ -136,12 +132,10 @@ def check_trivy() -> None:
                 findings.append(f"{target}: {vuln.get('VulnerabilityID')} ({vuln.get('Severity')})")
             for secret in result.get("Secrets", []) or []:
                 # For a "secret" result, Target *is* the file path inside the image.
-                if target in ALLOWED_SECRET_PATHS:
-                    continue
-                findings.append(f"{target}: unallowed secret finding ({secret.get('Title')})")
+                findings.append(f"{target}: secret finding ({secret.get('Title')})")
 
         check(
-            f"trivy: {image} has no unallowed HIGH/CRITICAL findings",
+            f"trivy: {image} has no HIGH/CRITICAL findings",
             not findings,
             "; ".join(findings)[:500],
         )

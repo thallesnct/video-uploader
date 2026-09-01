@@ -5,27 +5,30 @@ nothing more, so the issuer is swappable — and because a load test that spends
 its time inside a real identity provider's interactive flows is measuring the
 wrong system. POST /token mints a token for any subject, instantly.
 
-NOT for production. The signing key is committed to this repository.
+NOT for production. The signing key is generated fresh, in memory, every
+process start — never written to disk, never committed. Nothing needs it to
+be stable across restarts: a client verifies against this process's own live
+/jwks.json, not a cached or pinned key, and KEY_ID is a fixed label, not the
+key material. (This repo is public on GitHub; committing even a fake private
+key is worth avoiding when generating one costs nothing.)
 """
 
 from __future__ import annotations
 
-import pathlib
 import time
 from typing import Any
 
 import jwt
-from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import FastAPI
 from jwt.utils import base64url_encode
 from pydantic import BaseModel
 
-KEY_PATH = pathlib.Path(__file__).with_name("dev-only-insecure-signing-key.pem")
 KEY_ID = "dev-key-1"
 ISSUER = "http://devauth:8080"
 AUDIENCE = "video-pipeline"
 
-_private_key = serialization.load_pem_private_key(KEY_PATH.read_bytes(), password=None)
+_private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 _public_numbers = _private_key.public_key().public_numbers()
 
 app = FastAPI(title="dev OIDC issuer", docs_url="/docs")

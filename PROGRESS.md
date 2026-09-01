@@ -1160,6 +1160,36 @@ Refs: ADR-0015
       `actionlint` against the real file (`docker run rhysd/actionlint`,
       clean) and manual review of the job graph, stated as the real limit on
       verification depth here, not glossed over.
+
+      **Addendum, after this phase closed**: the first real push actually
+      triggered the workflow, and it did exactly its job — `integration`
+      failed on a genuinely fresh checkout with `FileNotFoundError` for
+      `backend/services/devauth/dev-only-insecure-signing-key.pem`. That
+      file existed only on this dev machine (generated once, long before
+      this session, never actually committed — a blanket `*.pem`
+      `.gitignore` rule silently excluded it from every `git add`), so
+      every local `make ci`/`make integration` run in this whole session
+      passed by accident on a file that was never in git at all. The
+      lesson generalizes past this one file: this session's own repeated
+      local `make ci` runs were never a substitute for what a truly fresh
+      clone proves, and the CI workflow this item built is what finally
+      caught it. First instinct was to commit the file (it's a self-labeled
+      dev-only fixture, already Trivy-allow-listed in
+      `infra/security_verify.py` on that exact reasoning) — reconsidered
+      before pushing: this repo is public, and committing any private key
+      material, fake or not, is worth avoiding when the alternative costs
+      nothing. Fixed properly instead: `devauth/main.py` now generates its
+      RSA keypair fresh in memory at process start (`rsa.generate_private_key`),
+      never touching disk — works identically for `services.devauth.main`'s
+      direct host-side import (`tests/integration/conftest.py`, the actual
+      path that failed) and for the Docker container, with no read-only-
+      rootfs conflict since nothing writes anywhere. `security_verify.py`'s
+      `ALLOWED_SECRET_PATHS` allow-list is now gone too — there is nothing
+      left for Trivy's secrets scan to legitimately find. Verified for
+      real: built devauth fresh, minted a token, decoded and verified it
+      against the served `/jwks.json` with a real `PyJWK` round-trip; then
+      `make integration` — 80 passed, 357.20s, exercising the exact import
+      path CI hit.
 - [x] Migrations backward compatible for one release; run as a pre-deploy job.
       Policy written down in `backend/migrations/README.md` (expand/contract:
       add nullable-or-defaulted, never drop/rename/retype in the same release
