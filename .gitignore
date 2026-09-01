@@ -23,16 +23,6 @@ frontend/dist/
 .env.local
 *.pem
 *.key
-# One deliberate exception: devauth's dev-only mock-issuer signing key is a
-# committed fixture, not a secret (its own filename says so, and
-# infra/security_verify.py's Trivy allow-list already documents the same
-# reasoning) — never real credentials, never used for anything but minting
-# local test tokens. The blanket *.pem rule above was silently excluding it
-# from every `git add`, so a fresh clone (a real CI run) never had it at
-# all and devauth's own eager `KEY_PATH.read_bytes()` at import time raised
-# FileNotFoundError — this file existed only on the machine that generated
-# it once, never in git.
-!backend/services/devauth/dev-only-insecure-signing-key.pem
 
 # Test media & scratch output. *.ts alone would also match every TypeScript
 # source file in frontend/, so HLS segments are scoped to where ffmpeg
