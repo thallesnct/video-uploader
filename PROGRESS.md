@@ -1069,7 +1069,22 @@ Refs: ADR-0015
       correctly suppressing the fifth from `unresolved`; `0001`–`0006` audited
       for real by running the checker against them, not assumed clean —
       PASSED, confirming the "additive so far" claim empirically.
-- [ ] SLOs defined; alerts fire on symptoms (lag, DLQ depth, SLO burn)
+- [x] SLOs defined; alerts fire on symptoms (lag, DLQ depth, SLO burn). The
+      symptom-alerts half was already true (5 alerts already firing on
+      symptoms in `ops/prometheus/rules/pipeline.yml` from Phase 10, verified
+      by reading the file rather than assumed from recon). What this item
+      added: a concrete SLO table in ADR-0015 §9 replacing its prose,
+      explicitly cross-referencing each target to the alert that watches it.
+      One SLO (time-to-first-rendition p95) genuinely has no alert — it spans
+      probe→queue→transcode and nothing emits a single duration for that
+      today (a named Phase-10 gap, already flagged in
+      `pipeline-overview.json`'s own panel description, not newly
+      discovered). Deliberately did **not** invent a threshold to alert on:
+      this repo's own convention already rejects a guessed number
+      (`pipeline.yml`'s "Thresholds are placeholders until Phase 10 measures
+      real numbers"), and Phase 14 exists specifically to measure it. Noted
+      as observable-but-not-yet-alertable (per-video, via the trace each
+      upload already produces) rather than silently left off the table.
 - [ ] README quickstart; ADR index current; PLAN.md diagram matches reality
 - [x] **Known gap from Phase 5** — `RenditionRepository.claim()`'s stale window
       (`STALE_AFTER = 2h`) is longer than the retry ladder's total span

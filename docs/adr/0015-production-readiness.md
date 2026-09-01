@@ -108,10 +108,42 @@ client id. Brokers spread across availability zones with rack awareness.
 
 ### 9. SLOs and alerting
 
-Defined targets, with the alerts of ADR-0010 attached: e.g. p95 time-to-first-
-rendition < 60 s for a 5-minute source; ≥99% of videos complete without manual
-intervention; DLQ empty. Alerts page on *symptoms* (lag, DLQ depth, SLO burn),
-not on causes.
+Defined targets, each attached to the symptom alert that watches it
+(`ops/prometheus/rules/pipeline.yml`) rather than a cause — ADR-0010's own
+rule, restated concretely here (Phase 12):
+
+| SLO | Target | Watched by |
+|---|---|---|
+| Time to first rendition | p95 < 60 s for a 5-minute source | **No direct alert** — see below |
+| Pipeline completes without manual intervention | ≥ 99% of videos | `DeadLetterQueueNonEmpty` — a DLQ arrival *is* the manual-intervention event (`make replay`), so its count is this SLO's error budget spend, not a proxy for it |
+| DLQ depth | 0, always | `DeadLetterQueueNonEmpty` (same alert — the instantaneous-symptom framing of the row above) |
+| Stage handling time | p99 < 300 s per stage | `StageP99Regression` |
+| Consumer backlog | bounded, recovers | `ConsumerLagHigh` |
+| Rebalance-eviction risk | no message runs past 480s in-flight | `StageApproachingPollIntervalEviction` — the ADR-0004 early warning: 80% of `max.poll.interval.ms`, so a message that would eventually get evicted is caught before the eviction, not after |
+| SSE capacity | concurrent streams stay under the configured cap | `SSEConnectionsAtCap` |
+
+Time to first rendition has no alert because it has no metric: it spans
+probe → queue wait → transcode, and nothing today emits a single "upload to
+first rendition" duration (`ops/grafana/dashboards/pipeline-overview.json`'s
+own Pipeline Overview panel already says as much — "the closest thing to
+end-to-end latency... without a dedicated upload-to-complete metric," a
+Phase 10 finding, not a new one). It's *observable* per video today, through
+the trace each upload produces (ADR-0010: "per-video questions need
+traces") — spanning probe through the first `rendition.completed`, verified
+live in `obs-verify`. What it doesn't have is an aggregate p95 or a
+threshold to page on. Manufacturing one now means guessing a number this
+repo's own convention explicitly rejects elsewhere (`pipeline.yml`'s own
+header: "Thresholds are placeholders until Phase 10 measures real numbers")
+— Phase 14 exists specifically to replace a guess with a measured baseline
+(load-testing scenario → real p95 → this row's target and its alert both
+get filled in from data, not invented here).
+
+Every other threshold above is *itself* still a placeholder in the same
+sense, not yet a measured baseline — Phase 14's own checklist item
+("Record the numbers as SLO baselines in ADR-0015, replacing its
+placeholders") is what turns this table's targets into verified numbers; this
+section defines what's being targeted and how each target's burn is
+observed, which is the part that doesn't wait on load-test data to be true.
 
 ## Alternatives considered
 
