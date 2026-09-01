@@ -1023,8 +1023,58 @@ Refs: ADR-0015
 - [x] Input allow-list from ffprobe before transcoding; no `shell=True` anywhere;
       filenames derived from `video_id`, never from the uploaded name
 - [x] Backpressure / concurrency caps per worker; resource limits in compose
-- [ ] Kafka prod profile: RF=3, `min.insync.replicas=2`, `acks=all`, no unclean
-      leader election, auto-create off, TLS+SASL, per-topic retention
+- [x] Kafka prod profile: RF=3, `min.insync.replicas=2`, `acks=all`, no unclean
+      leader election, auto-create off, TLS+SASL, per-topic retention.
+      Rehearsed locally, once (confirmed with the user — no live deployment
+      target). `docker-compose.prod.yml` gains `kafka-1`/`kafka-2`/`kafka-3`
+      — a real 3-broker KRaft quorum, each its own volume/container_name, no
+      published host port (everything driven via `docker compose exec`,
+      matching item 8's isolation precedent). New
+      `infra/gen_kafka_certs.sh`: self-signed keystore/truststore + a
+      `KafkaServer` JAAS config generated via `keytool` run *inside* the
+      same `cp-kafka` image the brokers use (bundles a JDK) rather than a
+      new host dependency — gitignored, regenerated fresh every run. New
+      `infra/kafka_prod_verify.py` (`make kafka-prod-verify`): brings the
+      cluster up, creates a topic through the **authenticated** SASL_SSL
+      listener, describes it back and asserts `ReplicationFactor: 3`,
+      `min.insync.replicas=2`, `unclean.leader.election.enable=false`, and
+      every partition's ISR has all 3 replicas — then, the check that
+      proves auth is *enforced* rather than merely *configured*: an
+      unauthenticated client attempting the same listener is genuinely
+      rejected. Passed twice in a row for real, output quoted below; dev
+      Kafka (`vp-kafka`) confirmed still healthy and untouched after each
+      run, isolated project's containers/volumes confirmed gone after
+      teardown.
+
+      Three real bugs found and fixed getting a working cluster, none
+      visible from the compose file alone:
+      1. `KAFKA_OPTS is required` — the `cp-kafka` image's own `configure`
+         script hard-requires `KAFKA_OPTS` set whenever
+         `KAFKA_SASL_ENABLED_MECHANISMS` is set, regardless of which JAAS
+         mechanism is used to actually configure it.
+      2. A per-listener JAAS config env var
+         (`KAFKA_LISTENER_NAME_<listener>_<mechanism>_SASL_JAAS_CONFIG`)
+         silently produces the wrong property key when the listener name
+         itself contains an underscore (`SASL_SSL` → the naive env-var-to-
+         property mapper collapses it to `sasl.ssl` instead of preserving
+         `sasl_ssl`, so Kafka never finds the JAAS entry it needs — a real,
+         confirmed exception, not a guess) — renaming the listener to avoid
+         the underscore broke the *opposite* thing: the same script detects
+         "SSL is enabled" and "SASL is enabled" via a literal substring
+         match on `KAFKA_ADVERTISED_LISTENERS` (`"SSL://"` /
+         `SASL_.*://`), so a listener without "SASL_" in its name skips the
+         keystore/truststore resolution entirely. No single listener name
+         satisfies both naive checks — resolved by keeping the listener
+         named `SASL_SSL` (so both substring checks fire correctly) and
+         switching to a static `kafka_server_jaas.conf` file +
+         `KAFKA_OPTS=-Djava.security.auth.login.config=...` instead of the
+         per-listener env var, sidestepping the underscore bug entirely.
+      3. Compose concatenates `ports:` across `-f` files (item 8's own
+         finding) doesn't even apply here in the end — `kafka-1/2/3` are
+         new service names, not overrides of the base file's `kafka`, so
+         there's nothing to concatenate against; confirmed via `docker
+         compose config` before ever running `up`, per the plan's own
+         explicit warning to check this before the first run, not after.
 - [x] Prometheus multiprocess mode wired in the API entrypoint (ADR-0014 gotcha)
 - [x] Backups: Postgres PITR with a **rehearsed restore**; object versioning +
       lifecycle rules for `tmp/` and abandoned uploads. Lifecycle rules for

@@ -22,7 +22,7 @@ DC_OBS  := docker compose -f docker-compose.yml -f docker-compose.obs.yml
 .DEFAULT_GOAL := help
 .PHONY: help up down logs ps topics buckets bootstrap smoke migrate replay \
         obs-up obs-down obs-verify replay-verify unit integration e2e lint ci \
-        security-verify migrate-compat backup-verify
+        security-verify migrate-compat backup-verify kafka-prod-verify
 
 help: ## List targets
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | sort | \
@@ -188,6 +188,12 @@ migrate-compat: ## Static check: every migration's upgrade() is rolling-restart-
 # only: doesn't need `up`/`migrate` against the *default* project at all.
 backup-verify: .env ## Phase 12 gate: a real Postgres PITR restore reaches an exact point in time
 	@python3 infra/backup_verify.py
+
+# Same isolation discipline as backup-verify — its own `docker compose -p`
+# project, torn down unconditionally, never the dev stack's default one.
+kafka-prod-verify: .env ## Phase 12 gate: 3-broker KRaft cluster, RF=3/ISR=3 over real TLS+SASL
+	@bash infra/gen_kafka_certs.sh
+	@python3 infra/kafka_prod_verify.py
 
 # `up migrate`, not just `up`, matching e2e/replay-verify's own precedent
 # (docker-compose.yml's comment on the `app` profile): on a machine that has

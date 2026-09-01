@@ -40,3 +40,7 @@ tmp/
 
 # Host venv for integration tests (uv is not installed on this machine)
 .venv-host/
+
+# Generated fresh each `make kafka-prod-verify` run by infra/gen_kafka_certs.sh —
+# a rehearsal-only keystore/truststore with a hardcoded password, never real secrets.
+infra/kafka-certs/
