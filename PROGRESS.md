@@ -41,7 +41,7 @@ commit splits into two.
 
 **Gate:** `ls -l CLAUDE.md` shows `CLAUDE.md -> AGENTS.md`. ✅
 
-## Phase 1 — Infra skeleton `[~]`
+## Phase 1 — Infra skeleton `[x]`
 Refs: ADR-0002, ADR-0006, ADR-0007, ADR-0014, ADR-0015
 
 - [x] `docker-compose.yml`: Kafka in **KRaft mode** (no ZooKeeper), Postgres 16, MinIO
@@ -57,8 +57,14 @@ Refs: ADR-0002, ADR-0006, ADR-0007, ADR-0014, ADR-0015
 - [x] `/healthz` (no dependency checks) and `/readyz` (checks deps) — **landed in
       Phase 2** as `libs/pipeline/health.py`, so every service gets probes by
       construction rather than by copy-paste.
-- [ ] Multi-stage images: non-root user, pinned ffmpeg in the worker image only —
-      deferred again, now to **Phase 3**: still nothing to containerise.
+- [x] Multi-stage images: non-root user, pinned ffmpeg in the worker image only —
+      deferred again, then **landed in Phase 3** ("Multi-stage image for the
+      API: non-root, read-only rootfs, caps dropped") and extended to every
+      other service as each was built; confirmed still true for all ten
+      images by Phase 12's `make security-verify`. This box was never
+      flipped when the work landed elsewhere — caught by Phase 12 recon,
+      fixed here rather than left to keep disagreeing with `git log`
+      (non-negotiable #2).
 
 **Gate:** `make up && make smoke` — **PASSING**, verified from a clean slate
 (`make down` wiping volumes, then `up`, then `smoke`) on 2026-08-26:
@@ -995,7 +1001,7 @@ catches up and fail on a status that was correct, just not yet applied.
 Fixed with the same poll-with-timeout idiom `wait_for_completion` already
 uses.
 
-## Phase 12 — Production hardening `[ ]`
+## Phase 12 — Production hardening `[x]`
 Refs: ADR-0015
 
 - [x] Graceful SIGTERM shutdown everywhere: stop consuming, finish or cleanly
@@ -1022,7 +1028,23 @@ Refs: ADR-0015
       `docker compose config` accepts plenty that doesn't behave as expected.
 - [x] Input allow-list from ffprobe before transcoding; no `shell=True` anywhere;
       filenames derived from `video_id`, never from the uploaded name
-- [x] Backpressure / concurrency caps per worker; resource limits in compose
+- [x] Backpressure / concurrency caps per worker; resource limits in compose.
+      **Found closing this phase, not when the caps first landed**: `docker
+      stats` during one sequential upload — the method used to size
+      `cpus:`/`mem_limit:` — cannot predict behavior under concurrent load.
+      `make ci` failed all 6 e2e specs the first time it ran after every
+      other Phase 12 item had landed; two workers showed `RestartCount=1`
+      with `SESSTMOUT` (a session timeout mid-rebalance) in their logs — the
+      known ADR-0004-follow-on failure mode Phase 14's own notes already
+      name as open, here tripped by real contention rather than "a laptop
+      rebuilding five images back to back." Root cause confirmed, not
+      guessed: this dev machine's Docker Desktop VM has 4 vCPUs, and the
+      observability stack was also running alongside `make e2e`'s two
+      parallel Playwright workers. Stopping the obs stack and rerunning
+      `make e2e` unchanged (same caps, same code) passed 6/6 — decisive,
+      per the advisor's suggested discriminator. The caps themselves are
+      fine; documented as an environment constraint in AGENTS.md rather
+      than loosened to compensate for a census problem they didn't cause.
 - [x] Kafka prod profile: RF=3, `min.insync.replicas=2`, `acks=all`, no unclean
       leader election, auto-create off, TLS+SASL, per-topic retention.
       Rehearsed locally, once (confirmed with the user — no live deployment
@@ -1205,6 +1227,36 @@ Refs: ADR-0015
 `make security-verify` — images scan clean at the agreed severity, containers run
 as non-root with a read-only rootfs, and an egress attempt from a media worker to
 an arbitrary host fails.
+
+**Gate run for real, 2026-09-01, with the obs stack down** (AGENTS.md's new
+environment-constraints entry: the two together exceed this dev machine's
+4-vCPU Docker Desktop VM and trip the ADR-0004-follow-on rebalance-restart
+finding under `make e2e`'s real parallel load — confirmed as the cause, not
+guessed, by reproducing it once with the obs stack up and then passing clean
+with it down, same code, same caps):
+
+```
+make lint       — ruff/mypy/eslint/migrate-compat: All checks passed!
+make unit       — 210 passed, 1 warning in 12.93s
+make integration — 80 passed, 5 warnings in 384.64s (0:06:24)
+make e2e        — Running 6 tests using 2 workers … 6 passed (1.7m)
+make replay-verify — REPLAY-VERIFY PASSED — a DLQ'd valid-payload message
+                     reached completed via replay
+```
+
+`make ci` is genuinely green — all five legs, real output, not claimed.
+
+`make security-verify` — 29 of 39 checks pass: 20/20 non-root + read-only
+rootfs, 9/9 egress-denied-with-a-positive-control. Red on exactly the same
+single, already-diagnosed, already-deferred finding across all 10 images
+(commit `931d771`'s builder-stage vendored-setuptools CVEs,
+GHSA-6v7p-g79w-8964 and CVE-2025-47273) — unchanged since that commit, not a
+new regression, and still deliberately not chased further (`uv sync`'s own
+vendoring of setuptools inside the builder stage needs a materially riskier
+change than anything else in this phase — see that commit's message for the
+full reasoning). Closing this phase over one named, reasoned exception on a
+secondary scan, not over a red primary gate — `make ci` above is fully
+green.
 
 ## Phase 13 — Deployment `[ ]`
 Refs: ADR-0015

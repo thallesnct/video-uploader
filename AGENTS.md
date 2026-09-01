@@ -62,6 +62,21 @@ with Prometheus metrics and OpenTelemetry traces.
   advancing. Don't add `channel: "chrome"` or install Google Chrome to work
   around it — that's a new dependency (non-negotiable #9) and more image
   weight, not a one-line fix.
+- **The Docker Desktop VM on this dev machine has only 4 vCPUs**, regardless
+  of the host's real core count. Phase 12 gave `worker-probe`/`transcode`/
+  `thumbnail`/`package` each `cpus: "1"` (ADR-0015 containment, sized from a
+  real `docker stats` reading during one sequential upload). That reading
+  couldn't see what concurrent load does: with the observability stack
+  (`prometheus`/`grafana`/`tempo`/`otel-collector`/`kafka-exporter`) also
+  running, `make e2e`'s two parallel Playwright workers drove enough real
+  CPU contention to trip the known ADR-0004-follow-on failure mode
+  (`SESSTMOUT` → group rejoin → crash-and-restart, PROGRESS.md's Phase 14
+  notes) — all 6 e2e specs failed. Confirmed as the actual cause, not
+  guessed: stopping the obs stack and rerunning `make e2e` unchanged (same
+  caps, same code) passed clean, 6/6. **Run `make e2e`/`make ci` with the
+  obs stack down** (`make obs-down`, or simply don't `make obs-up` first) —
+  don't loosen the CPU caps to compensate for a census problem they didn't
+  cause.
 
 ## Commands
 
