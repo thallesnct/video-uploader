@@ -31,8 +31,17 @@ RUN apt-get update \
 
 # Same trivy scan also found HIGH CVEs in the base image's system
 # pip/setuptools bootstrap tooling (unused at runtime by an
-# already-built app, but still an image-scan finding worth clearing).
-RUN /usr/local/bin/python3.11 -m pip install --no-cache-dir --upgrade pip setuptools wheel
+# already-built app). Upgrading in place wasn't the end of it, though:
+# pip's *own* bundled vendor SBOM (pip/_vendor/bom.cdx.json) itself
+# declares an outdated vendored msgpack and a stale setuptools build-
+# time reference — a supply-chain lag inside pip's own release, not
+# this project's uv.lock — and re-appeared as a fresh finding even
+# after upgrading pip. Nothing at runtime needs this tooling at all,
+# so the actual fix is to not ship it: upgrade (still needed briefly,
+# to patch the base image's stale copies first), then uninstall.
+RUN /usr/local/bin/python3.11 -m pip install --no-cache-dir --upgrade pip setuptools wheel \
+    && /usr/local/bin/python3.11 -m pip uninstall --yes pip setuptools wheel \
+    && rm -rf /usr/local/lib/python3.11/ensurepip
 RUN useradd --system --uid 10006 --create-home appuser
 WORKDIR /app
 ENV PYTHONUNBUFFERED=1 SCRATCH_DIR=/scratch PATH="/app/.venv/bin:$PATH"

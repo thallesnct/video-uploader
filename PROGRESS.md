@@ -1288,6 +1288,32 @@ full reasoning). Closing this phase over one named, reasoned exception on a
 secondary scan, not over a red primary gate — `make ci` above is fully
 green.
 
+**Addendum, after this phase closed**: the "materially riskier" assumption
+above turned out wrong once actually investigated. A real CI run
+(`security-verify`'s own GitHub Actions job, item 9) turned a documented
+local exception into a genuinely permanent red required check — worth
+revisiting, not living with. Traced both CVEs to their exact source via
+Trivy's own JSON output (`PkgID`/`Layer.DiffID`, not guessed): both live
+inside `pip`'s *own* bundled CycloneDX SBOM
+(`pip/_vendor/bom.cdx.json`) — pip 26.2.1 vendors an outdated `msgpack`
+(GHSA-6v7p-g79w-8964) and its own build provenance metadata references a
+stale `setuptools` (CVE-2025-47273), neither literally present as an
+installed package anywhere in `/app/.venv` (confirmed by filesystem
+search — this was never the app's own dependency graph, always pip's).
+Since nothing at runtime imports system `pip`/`setuptools`/`wheel` at all
+(the app runs entirely from `/app/.venv`, built by `uv` in the builder
+stage — the same fact the original, more-cautious fix already noted),
+the real fix was simpler than the deferred one ever needed to be: all 10
+Dockerfiles now uninstall `pip`/`setuptools`/`wheel` and remove
+`ensurepip` right after using them to patch the base image's own stale
+copies, rather than leaving them installed. `make security-verify` —
+**SECURITY-VERIFY PASSED**, 39/39, first time ever for this project (all
+10 images clean, 20/20 non-root+read-only, 9/9 egress-denied). Verified
+for real: rebuilt every image, confirmed `pip`/`setuptools`/`wheel`/
+`ensurepip` genuinely gone from a running container while the app's own
+`.venv` and imports still work, then the full `make security-verify`
+run against the live stack.
+
 ## Phase 13 — Deployment `[ ]`
 Refs: ADR-0015
 
