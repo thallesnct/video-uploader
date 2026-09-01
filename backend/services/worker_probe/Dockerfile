@@ -31,10 +31,19 @@ FROM python:3.11-slim AS ffmpeg-base
 
 # Debian bookworm's ffmpeg (5.1.x), pinned to the distro rather than a static
 # build so security updates arrive with the base image.
+# Phase 12, ADR-0015 §8: apt-get upgrade picks up whatever OS-level
+# security patches Debian has published since this base image tag was
+# last built — caught by make security-verify's own Trivy scan.
 RUN apt-get update \
+    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/* \
     && ffmpeg -version | head -1
+
+# Same trivy scan also found HIGH CVEs in the base image's system
+# pip/setuptools bootstrap tooling (unused at runtime by an
+# already-built app, but still an image-scan finding worth clearing).
+RUN /usr/local/bin/python3.11 -m pip install --no-cache-dir --upgrade pip setuptools wheel
 
 RUN useradd --system --uid 10003 --create-home appuser
 WORKDIR /app

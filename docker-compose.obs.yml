@@ -21,6 +21,11 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+    # Phase 12: scrapes worker-probe/transcode/thumbnail directly by service
+    # name (ops/prometheus/prometheus.yml), which are media-internal-only
+    # now (ADR-0015 §1 egress restriction) — needs to be on that network too
+    # to reach them, in addition to `default` for its own published port.
+    networks: [default, media-internal]
 
   grafana:
     image: grafana/grafana:11.1.0
@@ -70,6 +75,9 @@ services:
     volumes:
       - ./ops/otel/collector.yml:/etc/otel/collector.yml:ro
     depends_on: [tempo]
+    # See prometheus's comment — worker-probe/transcode/thumbnail ship spans
+    # here directly by service name and are media-internal-only now.
+    networks: [default, media-internal]
 
   kafka-exporter:
     image: danielqsj/kafka-exporter:v1.7.0

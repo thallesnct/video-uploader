@@ -54,6 +54,12 @@ services:
       timeout: 10s
       retries: 15
       start_period: 20s
+    # On both networks (Phase 12): `default` for its published host port
+    # (make replay/smoke/integration tests all reach it via localhost), and
+    # `media-internal` so the egress-restricted media workers below can
+    # still reach it by service name — internal:true has no route out, but
+    # a service *on* it reaches every other service also on it fine.
+    networks: [default, media-internal]
 
   postgres:
     image: postgres:16-alpine
@@ -71,6 +77,8 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    # See kafka's comment.
+    networks: [default, media-internal]
 
   minio:
     image: minio/minio:latest
@@ -92,6 +100,8 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+    # See kafka's comment.
+    networks: [default, media-internal]
 
   devauth:
     build:
@@ -100,6 +110,17 @@ services:
     container_name: vp-devauth
     ports:
       - "${DEVAUTH_PORT:-8080}:8080"
+    # Phase 12, caught by make security-verify's own first real run: every
+    # other service already had this, devauth was the one gap — a plain
+    # stateless FastAPI app reading a static signing key, no reason it
+    # needed to be the exception.
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8080/healthz')\""]
       interval: 5s
@@ -220,6 +241,13 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    # Phase 12, ADR-0015 §1: "no network egress beyond Kafka/S3/Postgres."
+    # media-internal is internal:true (no route out at all) — not on
+    # `default` means this container has no path to the internet even if
+    # ffmpeg/ffprobe were exploited by a hostile upload. kafka/postgres/
+    # minio are also on media-internal (see kafka's own comment), so this
+    # worker still reaches every dependency it actually needs.
+    networks: [media-internal]
     depends_on:
       kafka:
         condition: service_healthy
@@ -273,6 +301,8 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    # See worker-probe's comment.
+    networks: [media-internal]
     depends_on:
       kafka:
         condition: service_healthy
@@ -319,6 +349,8 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    # See worker-probe's comment.
+    networks: [media-internal]
     depends_on:
       kafka:
         condition: service_healthy
@@ -564,6 +596,17 @@ services:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
       S3_BUCKET: ${S3_BUCKET}
+
+networks:
+  default:
+  # Phase 12, ADR-0015 §1: carries kafka/postgres/minio (also on `default`,
+  # for their published host ports) plus the three ffmpeg-touching media
+  # workers (only on this network — no route out at all, internal:true).
+  # otel-collector and prometheus (docker-compose.obs.yml) join this too,
+  # so tracing/scraping for those three workers still works when
+  # `make obs-up` is layered on — trusted infra we own, safe to bridge.
+  media-internal:
+    internal: true
 
 volumes:
   kafka-data:

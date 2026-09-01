@@ -177,7 +177,8 @@ lint: ## ruff + mypy + eslint
 	$(RUN) ruff format --check ../infra
 	cd frontend && npm run lint
 
-security-verify: ## Image scan, non-root, read-only rootfs, egress denied
-	@echo "not implemented until Phase 12" && exit 1
+security-verify: up ## Image scan, non-root, read-only rootfs, egress denied
+	$(COMPOSE) --profile app up -d --build --wait
+	@python3 infra/security_verify.py
 
 ci: lint unit integration e2e replay-verify ## Everything CI runs
