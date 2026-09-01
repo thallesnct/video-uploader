@@ -21,8 +21,8 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
@@ -34,7 +34,7 @@ jobs:
   unit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: make unit
 
   # testcontainers only — no compose stack, no migration step needed (each
@@ -43,7 +43,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [lint, unit]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: make integration
 
   # Builds every image this project ships and scans each one with the same
@@ -59,7 +59,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [lint, unit]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: build every service image
         run: |
           cp .env.example .env
@@ -81,7 +81,7 @@ jobs:
               -v "$PWD/sbom":/sbom aquasec/trivy:latest image \
               --format cyclonedx --output "/sbom/${img}.cyclonedx.json" "$img"
           done
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: sbom
           path: sbom/
@@ -90,7 +90,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [integration, build-and-scan]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: make e2e
 
   # The remaining two legs of `make ci` (Makefile: `ci: lint unit integration
@@ -101,12 +101,12 @@ jobs:
     runs-on: ubuntu-latest
     needs: [e2e]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: make replay-verify
 
   security-verify:
     runs-on: ubuntu-latest
     needs: [e2e]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: make security-verify
