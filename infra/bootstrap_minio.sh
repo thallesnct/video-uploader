@@ -23,6 +23,16 @@ else
   mc mb "local/$S3_BUCKET"
 fi
 
+# Sources and renditions are the irreplaceable data (ADR-0015 backups
+# section) — versioning means an overwrite or an accidental `mc rm` is
+# recoverable, the object-store equivalent of Postgres PITR above. tmp/
+# scratch still expires via the lifecycle rule below regardless of
+# versioning; MinIO expires every version of an object once its lifecycle
+# rule matches, not just the current one.
+mc version enable "local/$S3_BUCKET"
+echo -n "  versioning: "
+mc version info "local/$S3_BUCKET"
+
 cat <<JSON | mc ilm import "local/$S3_BUCKET"
 {
   "Rules": [

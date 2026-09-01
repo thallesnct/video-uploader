@@ -1,0 +1,50 @@
+# Production-shaped overlay — applied on top of docker-compose.yml
+# (`docker compose -f docker-compose.yml -f docker-compose.prod.yml ...`).
+# Phase 12 seeds this file with the two production concerns that are
+# genuinely dangerous to rehearse against the shared dev stack — Postgres
+# PITR (this block; infra/backup_verify.py destroys a data directory as
+# part of proving restore) and the Kafka TLS+SASL/RF=3 profile — each
+# always run under its own isolated `docker compose -p` project name, never
+# the default one, so a rehearsal can never touch the dev volumes this
+# session's other phases depend on. Phase 13 extends this same file with
+# the rest of the hardened deployment profile; it is grown, never replaced.
+#
+# No live deployment target (PLAN.md's scope note): this overlay is stood
+# up locally long enough for its own *_verify.py to prove it, then torn
+# down unconditionally — never left running.
+
+services:
+  # WAL archiving for point-in-time recovery. archive_command only fires
+  # once a WAL file is complete (a checkpoint, a full 16MB segment, or an
+  # explicit pg_switch_wal()) — infra/backup_verify.py calls
+  # pg_switch_wal() itself after each write it needs archived promptly,
+  # rather than waiting on Postgres's own timers.
+  #
+  # container_name/ports are overridden (not just extended) so a rehearsal
+  # run can never collide with the dev stack's already-running vp-postgres,
+  # whether or not that dev container happens to be up at the time.
+  postgres:
+    container_name: vp-postgres-pitr
+    # No `ports:` override here — Compose *concatenates* list-valued fields
+    # like `ports` across files rather than replacing them (verified via
+    # `docker compose config`: an override list, empty or not, adds to the
+    # base file's mapping instead of replacing it), so the base file's
+    # `${POSTGRES_PORT:-5432}:5432` would still bind host 5432 no matter
+    # what's written here. infra/backup_verify.py instead sets POSTGRES_PORT
+    # in its own subprocess environment before calling `docker compose up`,
+    # which the base file's interpolation picks up directly — the one lever
+    # that actually avoids colliding with the dev stack's published 5432.
+    command:
+      - postgres
+      - -c
+      - archive_mode=on
+      - -c
+      - archive_command=test ! -f /archive/%f && cp %p /archive/%f
+      - -c
+      - wal_level=replica
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+      - pg-archive:/archive
+
+volumes:
+  pg-archive:

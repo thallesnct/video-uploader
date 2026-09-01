@@ -1026,8 +1026,43 @@ Refs: ADR-0015
 - [ ] Kafka prod profile: RF=3, `min.insync.replicas=2`, `acks=all`, no unclean
       leader election, auto-create off, TLS+SASL, per-topic retention
 - [x] Prometheus multiprocess mode wired in the API entrypoint (ADR-0014 gotcha)
-- [ ] Backups: Postgres PITR with a **rehearsed restore**; object versioning +
-      lifecycle rules for `tmp/` and abandoned uploads
+- [x] Backups: Postgres PITR with a **rehearsed restore**; object versioning +
+      lifecycle rules for `tmp/` and abandoned uploads. Lifecycle rules for
+      `tmp/` and stale multipart uploads already existed (Phase 1's
+      `infra/bootstrap_minio.sh` — checked, not re-done); object versioning
+      did not — added `mc version enable` there (ADR-0015's own backups
+      section names sources/renditions as the irreplaceable data, the same
+      reasoning as Postgres PITR below, applied to the object store), run
+      for real against the live dev bucket and confirmed idempotent
+      (`local/videos versioning is enabled`, twice in a row). New
+      `docker-compose.prod.yml` (first content of this file — item 7 and
+      Phase 13 both extend it later, never replace it): a `postgres` service
+      override adding `archive_mode=on`/`archive_command`/`wal_level=replica`
+      and a `pg-archive` volume. New `infra/backup_verify.py`
+      (`make backup-verify`): writes a "keep" row, captures the exact server
+      timestamp via `clock_timestamp()`, writes a "drop" row, destroys the
+      live data directory, restores the base backup, replays WAL to that
+      timestamp, and asserts keep survived while drop didn't — proving
+      recovery reached a specific point, not just "a backup exists."
+      Runs under its own isolated `docker compose -p video-pipeline-pitr`
+      project, never the dev stack's default one, since destroying a data
+      directory on purpose demands it be structurally impossible to touch
+      the shared `pg-data` volume other phases depend on — found and fixed
+      two real isolation gaps while building this: `container_name` is a
+      literal, ignoring the project prefix, so the override had to give it
+      a distinct name (`vp-postgres-pitr`) or it would collide with a
+      running dev `vp-postgres`; and Compose *concatenates* list-valued
+      fields like `ports` across `-f` files rather than replacing them
+      (verified via `docker compose config`, not assumed), so an empty
+      `ports: []` override left the base file's `5432:5432` mapping intact
+      — fixed by overriding `POSTGRES_PORT` in the script's own subprocess
+      environment instead, which the base file's own interpolation picks
+      up. Also found rehearsing by hand before writing the script: a fresh
+      named volume is root-owned, so `archive_command` (running as the
+      `postgres` user) failed silently on every attempt until the script
+      explicitly `chown`s `/archive` after first boot. `make backup-verify`
+      run for real — PASSED — then reran to confirm teardown left nothing:
+      no `vp-postgres-pitr` container, no `video-pipeline-pitr_*` volumes.
 - [x] CI workflow: lint → unit → integration → build+Trivy scan+SBOM → e2e.
       `.github/workflows/ci.yml`, seven jobs, each calling the exact `make`
       target used locally (no parallel bespoke script) — `lint`/`unit` run

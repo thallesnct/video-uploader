@@ -22,7 +22,7 @@ DC_OBS  := docker compose -f docker-compose.yml -f docker-compose.obs.yml
 .DEFAULT_GOAL := help
 .PHONY: help up down logs ps topics buckets bootstrap smoke migrate replay \
         obs-up obs-down obs-verify replay-verify unit integration e2e lint ci \
-        security-verify migrate-compat
+        security-verify migrate-compat backup-verify
 
 help: ## List targets
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | sort | \
@@ -181,6 +181,13 @@ lint: ## ruff + mypy + eslint + migration backward-compat
 
 migrate-compat: ## Static check: every migration's upgrade() is rolling-restart-safe
 	@python3 infra/check_migration_compat.py
+
+# Runs against its own isolated `docker compose -p video-pipeline-pitr`
+# project (docker-compose.prod.yml's postgres override) — never the dev
+# stack, since this script destroys a data directory on purpose. `.env`
+# only: doesn't need `up`/`migrate` against the *default* project at all.
+backup-verify: .env ## Phase 12 gate: a real Postgres PITR restore reaches an exact point in time
+	@python3 infra/backup_verify.py
 
 # `up migrate`, not just `up`, matching e2e/replay-verify's own precedent
 # (docker-compose.yml's comment on the `app` profile): on a machine that has
